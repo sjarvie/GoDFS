@@ -1,42 +1,58 @@
-
-/*
-The namenode listens for user or data node connections
-*/
-
 package main
 
 import (
-    "fmt"
-    "log"
-    "net"
-    "encoding/gob"
+ "fmt"
+ "net"
+ "encoding/gob"
+ "log"
 )
 
-const listenAddr = "localhost:8080"
+const serverAddr = "localhost:8080"
 
 type Packet struct {
-    command, data string
+    ID string
+    Command string
+    Data string
 }
-func handleConnection(conn net.Conn) {
-    fmt.Println("Connected to a node")
 
-    dec := gob.NewDecoder(conn)
-    p := &Packet{}
-    dec.Decode(p)
-    fmt.Printf("Received : %+v", p);
+func (p Packet) String() string {
+    s := "NN" + p.ID
+    return s
 }
+
+func handleConnection(conn net.Conn){
+     encoder := gob.NewEncoder(conn)
+     decoder := gob.NewDecoder(conn)
+     for  {
+         var packet Packet
+         decoder.Decode(&packet)
+
+         if (packet.Command == "HB"){
+            fmt.Println("Received Heartbeat from %s", packet.ID)
+            ackPacket := Packet {ID: "NN",Command : "ACK", Data: ""}
+            encoder.Encode(ackPacket)
+         }
+     }
+     conn.Close() // we're finished
+}
+
 
 func main() {
-    fmt.Println("start");
-   ln, err := net.Listen("tcp", listenAddr)
-    if err != nil {
-        log.Fatal(err)
-    }
+
+    listener, err := net.Listen("tcp", serverAddr)
+    checkError(err)
     for {
-        conn, err := ln.Accept() // this blocks until connection or error
-        if err != nil {
-            log.Fatal(err)
-        }
-        go handleConnection(conn) // a goroutine handles conn so that the loop can accept other connections
-    }
+        conn, err := listener.Accept()
+        checkError(err)
+
+        go handleConnection(conn)
+        
+        
+     }
+}
+
+func checkError(err error) {
+     if err != nil {
+        log.Fatal("Fatal error ", err.Error())
+     }
 }
