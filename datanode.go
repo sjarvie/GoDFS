@@ -60,7 +60,7 @@ func performAction(encoder *gob.Encoder){
     if action == "HB" {
         p.Command = "HB"
     } else if action == "LIST"{
-        files := listFS(path)
+        files := listFS()
         p.Files = make([]string, len(files))
         for i, f := range files {
                 fmt.Println(f.Name(), "\t", f.Size())
@@ -74,8 +74,8 @@ func performAction(encoder *gob.Encoder){
 
 // List directory contents
 // Later add recursion and switch to blocks
-func listFS(directory) []os.FileInfo {
-    files, _ := ioutil.ReadDir(directory)
+func listFS() []os.FileInfo {
+    files, _ := ioutil.ReadDir(path)
     return files
 
     //for _, f := range files {
