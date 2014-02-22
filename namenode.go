@@ -13,6 +13,7 @@ type Packet struct {
     ID string
     Command string
     Data string
+    Files [] string
 }
 
 func (p Packet) String() string {
@@ -26,12 +27,27 @@ func handleConnection(conn net.Conn){
      for  {
          var packet Packet
          decoder.Decode(&packet)
+         fmt.Printf("Received Packet from : %s command : %s \n", packet.ID, packet.Command)
 
-         if (packet.Command == "HB"){
-            fmt.Println("Received Heartbeat from %s", packet.ID)
-            ackPacket := Packet {ID: "NN",Command : "ACK", Data: ""}
+         if packet.Command == "HB" {
+
+            listPacket := new(Packet)
+            listPacket.ID = "NN"
+            listPacket.Command = "LIST"
+            encoder.Encode(listPacket)
+         } else if packet.Command == "LIST" {
+            fmt.Printf("Listing directory contents from %s \n", packet.ID)
+            files := packet.Files
+            for _, f := range files {
+                fmt.Println(f)
+            }
+
+            ackPacket := new(Packet)
+            ackPacket.ID = "NN"
+            ackPacket.Command = "ACK"
             encoder.Encode(ackPacket)
-         }
+        
+        }
      }
      conn.Close() // we're finished
 }

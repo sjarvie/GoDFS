@@ -7,43 +7,113 @@ import (
     "os"
     "encoding/gob"
     "time"
+    "io/ioutil"
 )
 
 const serverAddr = "localhost:8080"
-var id string
+var id, path string // command line arguments
+var action = "HB"
+
+//Action that the data node is currently undergoing
+// HB : Heartbeat : Waiting for a command
+// LIST : Sending directory contents
+
+
 
 type Packet struct {
     ID string
     Command string
     Data string
+    Files [] string
+
 }
 
 func (p Packet) String() string {
-    s := "DN" + p.ID
+    s := p.ID + " : " + p.Command
     return s
 }
 
 
+func recv(conn net.Conn, packet_channel chan Packet){
+    decoder := gob.NewDecoder(conn)
+    for {
+        var responsePacket Packet
+        decoder.Decode(&responsePacket)
+        packet_channel <- responsePacket
+    }
+}
+
+
+
+func handleResponse(response Packet){
+    if response.Command == "ACK" {
+        action = "HB"
+    } else if response.Command == "LIST" {
+        action = "LIST"
+        fmt.Println("action now " + action)
+    }
+}
+
+func performAction(encoder *gob.Encoder){
+    p := new(Packet);
+    p.ID = id
+    if action == "HB" {
+        p.Command = "HB"
+    } else if action == "LIST"{
+        files := listFS(path)
+        p.Files = make([]string, len(files))
+        for i, f := range files {
+                fmt.Println(f.Name(), "\t", f.Size())
+                p.Files[i] = f.Name()
+        }
+        p.Command = "LIST"
+    }
+    encoder.Encode(p) // TODO syncronize this call
+}
+
+
+// List directory contents
+// Later add recursion and switch to blocks
+func listFS(directory) []os.FileInfo {
+    files, _ := ioutil.ReadDir(directory)
+    return files
+
+    //for _, f := range files {
+    //        fmt.Println(f.Name())
+    //}
+}
+
+
+
+
 func main() {
-    if len(os.Args) != 2 {
-        fmt.Println("Usage: ", os.Args[0], "id")
+    if len(os.Args) != 3 {
+        fmt.Println("Usage: ", os.Args[0], "id path")
         os.Exit(1)
     }
     id = os.Args[1]
+    path = os.Args[2]
 
-    heartbeat := Packet{ID: id, Command : "HB", Data: ""}
     conn, err := net.Dial("tcp", serverAddr)
     checkError(err)
 
     encoder := gob.NewEncoder(conn)
-    decoder := gob.NewDecoder(conn)
+
+    packet_channel := make(chan Packet)
+    tick := time.Tick(1000 * time.Millisecond)
+
+    go recv(conn,packet_channel)
 
     for {
-        time.Sleep(1000 * time.Millisecond)
-        encoder.Encode(heartbeat)
-        var responsePacket Packet
-        decoder.Decode(&responsePacket)
-        fmt.Println(responsePacket.String())
+        select {
+            case <-tick:
+                performAction(encoder)
+                fmt.Println("action : " + action)
+            case response := <-packet_channel:
+                handleResponse(response)
+                fmt.Println("Received : " + response.String())
+        }
+                
      }
      os.Exit(0)
 }
