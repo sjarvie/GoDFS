@@ -81,16 +81,8 @@ func BlocksFromFile(localname, remotename string) []datablock {
       
         h := blockheader{"DN1", remotename, n, num, numBlocks}
         data := make([]byte, 0, n)
-
-        //fmt.Println(w.Bytes())
-        //fmt.Println(data)
-
+        
         data = w.Bytes()[0:n]
-       // fmt.Println("copy")
-
-        //fmt.Println(w)
-        fmt.Println(data)
-
         b := datablock{h, data}
         blocks = append(blocks, b)
 

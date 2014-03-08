@@ -1,85 +1,92 @@
-
 package main
+
 import (
-    "fmt"
-    "net"
-    "os"
-    "encoding/gob"
-    "time"
-    "io/ioutil"
+	"encoding/json"
+	"fmt"
+	"io/ioutil"
+	"net"
+	"os"
+	"time"
 )
 
 const SERVERADDR = "localhost:8080"
-const SIZEOFBLOCK = 1000000
+const SIZEOFBLOCK = 1000
+
 var id, blockpath string // command line arguments
-var state = "HB"
-
-
+var state = HB
+const (
+	HB = iota
+	LIST = iota
+	ACK = iota
+	BLOCK = iota
+)
 
 // A file is composed of one or more blocks
-type datablock struct {
-    header blockheader
-    data []byte
+type block struct {
+	header blockheader
+	data   []byte
 }
 
 // block headers hold block data information
 type blockheader struct {
-    datanodeID string
-    filename string //the filename including the path "/data/test.txt"
-    size, sequenceNum, numBlocks int  //size in bytes, the order of the chunk within file
-    //TODO checksum
+	datanodeID                   string
+	filename                     string //the filename including the path "/data/test.txt"
+	size, sequenceNum, numBlocks int    //size in bytes, the order of the chunk within file
+	//TODO checksum
 }
 
 // packets are sent over the network
 type packet struct {
-    from, to string
-    cmd string
-    data block
-    headers []blockheader
+	SRC		 string
+	DST		 string
+	command  int
+	data     block
+	headers  []blockheader
 }
 
 // receive a packet and send to syncronized channel
-func ReceivePacket(conn net.Conn, p chan Packet){
-    decoder := gob.NewDecoder(conn)
-    for {
-        var r Packet
-        decoder.Decode(&r)
-        p <- r
-    }
+func Receivepacket(conn net.Conn, p chan packet) {
+	decoder := json.NewDecoder(conn)
+	for {
+		var r packet
+		decoder.Decode(&r)
+		fmt.Println(r)
+		p <- r
+	}
 }
 
-func (p *packet) String() string {
-    s := "NN" + p.from
-    return s
-}
 
 // change state to handle request from server
-func HandleResponse(r Packet){
-    if r.cmd == "ACK" {
-        state = "HB"
-    } else if r.cmd == "LIST" {
-        state = "LIST"
-        fmt.Println("state now " + state)
-    }
+func HandleResponse(r packet) {
+	if r.command == ACK {
+		state = HB
+	} else if r.command == LIST {
+		state = LIST
+	}
+	fmt.Println("state now ", state)
+
 }
 
 // handle a state's action
-func PerformAction(encoder *gob.Encoder){
-    p := new(Packet);
-    p.from = id
-    p.to = "NN" //TODO better naming conventions
-    if state == "HB" {
-        p.cmd = "HB"
-    } else if state == "LIST"{
-        list := GetBlockInfos()
-        p.headers = make([]blockheader, len(list))
+func PerformAction(encoder *json.Encoder) {
+	p := new(packet)
+	p.SRC = id
+	p.DST = "NN" //TODO better naming conventions
 
-        for _, b := range list {
-            apend(p.headers,b)
-        }
-        p.cmd = "LIST"
-    }
-    encoder.Encode(p) 
+	if state == HB {
+		p.command = HB
+	} else if state == LIST {
+		fmt.Println("Sending block headers")
+		list := GetBlockHeaders()
+		p.headers = make([]blockheader, len(list))
+
+		for i, b := range list {
+			p.headers[i] = b
+		}
+		p.command = LIST
+	}
+	//fmt.Println("Sending Packet : ", *p)
+	encoder.Encode(p)
 }
 
 //func blocksFromFile
@@ -88,74 +95,72 @@ func PerformAction(encoder *gob.Encoder){
 // Later add recursion and switch to blocks
 func GetBlockHeaders() []blockheader {
 
-    list, err := ioutil.ReadDir(blockpath)
-    CheckError(err)
-    headers := make([]blockheader, len())
+	list, err := ioutil.ReadDir(blockpath)
+	CheckError(err)
+	headers := make([]blockheader, 0, len(list))
 
-    for f in range list {
-        var b block
-        ReadGob(f.Name, &b)
-        append(headers, b)
-    }
-    return headers
+	for i, f := range list {
+		var b block
+		Readjson(f.Name(), &b)
+		headers[i] = b.header
+	}
+	return headers
 }
 
-
-func ReadGob(fileName string, key interface{}) {
-    inFile, err := os.Open(fileName)
-    CheckError(err)
-    decoder := gob.NewDecoder(inFile)
-    err = decoder.Decode(key)
-    CheckError(err)
-    inFile.Close()
+func Readjson(fname string, key interface{}) {
+	fi, err := os.Open(fname)
+	CheckError(err)
+	decoder := json.NewDecoder(fi)
+	err = decoder.Decode(key)
+	CheckError(err)
+	fi.Close()
 }
 
-func WriteGob(fileName string, key interface{}) {
-    outFile, err := os.Create(fileName)
-    CheckError(err)
-    encoder := gob.NewEncoder(outFile)
-    err = encoder.Encode(key)
-    CheckError(err)
-    outFile.Close()
-}   
-
+func Writejson(fileName string, key interface{}) {
+	outFile, err := os.Create(fileName)
+	CheckError(err)
+	encoder := json.NewEncoder(outFile)
+	err = encoder.Encode(key)
+	CheckError(err)
+	outFile.Close()
+}
 
 func main() {
 
-    if len(os.Args) != 3 {
-        fmt.Println("Usage: ", os.Args[0], "id path")
-        os.Exit(1)
-    }
-    id = os.Args[1]
-    blockpath = os.Args[2]
+	if len(os.Args) != 3 {
+	    fmt.Println("Usage: ", os.Args[0], "id path")
+	    os.Exit(1)
+	}
+	id = os.Args[1]
+	blockpath = os.Args[2]
 
-    conn, err := net.Dial("tcp", SERVERADDR)
-    CheckError(err)
+	conn, err := net.Dial("tcp", SERVERADDR)
+	CheckError(err)
 
-    encoder := gob.NewEncoder(conn)
+	encoder := json.NewEncoder(conn)
 
-    packetChannel := make(chan Packet)
-    tick := time.Tick(1000 * time.Millisecond)
+	packetChannel := make(chan packet)
+	tick := time.Tick(2* time.Second)
 
-    go ReceivePacket(conn,packet_channel)
+	go Receivepacket(conn, packetChannel)
 
-    for {
-        select {
-            case <-tick:
-                PerformAction(encoder)
-                fmt.Println("state : " + state)
-            case r := <-packetChannel:
-                PerformAction(r)
-                fmt.Println("Received : " + r.String())
-        }
-                
-     }
-     os.Exit(0)
+	for {
+		select {
+			case <-tick:
+				PerformAction(encoder)
+			case r := <-packetChannel:
+				HandleResponse(r)
+				PerformAction(encoder)
+				time.Sleep(1*time.Second)
+		}
+
+	}
+	os.Exit(0)
 }
 
 func CheckError(err error) {
-    if err != nil {
-        fmt.Println("Fatal error ", err.Error())
-        //os.Exit(1)
-    }
+	if err != nil {
+		fmt.Println("Fatal error ", err.Error())
+		//os.Exit(1)
+	}
 }
