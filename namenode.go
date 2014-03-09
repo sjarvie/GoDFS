@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net"
 	"os"
 	"strings"
@@ -16,47 +17,43 @@ import (
 const SERVERADDR = "localhost:8080"
 const SIZEOFBLOCK = 1000
 
-var headerChannel chan blockheader
+var headerChannel chan BlockHeader
 var root *filenode
-var filemap map[string][]blockheader //TODO combine with Nodes
+var filemap map[string](map[int][]BlockHeader) //TODO combine with Nodes
 var datanodemap map[string]*datanode
-
-
-
 
 var id string
 
-
-
 const (
-	HB = iota
-	LIST = iota
-	ACK = iota
-	BLOCK = iota
+	HB       = iota
+	LIST     = iota
+	ACK      = iota
+	BLOCK    = iota
+	BLOCKACK = iota
 )
 
-
-// A file is composed of one or more blocks
-type block struct {
-	header blockheader
-	data   []byte
+// A file is composed of one or more Blocks
+type Block struct {
+	Header BlockHeader
+	Data   []byte
 }
 
-// block headers hold block data information
-type blockheader struct {
-	datanodeID                   string
-	filename                     string //the filename including the path "/data/test.txt"
-	size, sequenceNum, numBlocks int    //size in bytes, the order of the chunk within file
-	//TODO checksum
+// Block Headers hold Block Data information
+type BlockHeader struct {
+	DatanodeID string
+	Filename   string //the Filename including the path "/data/test.txt"
+	Size       uint64 //Size of Block in bytes
+	BlockNum   int    // the 0 indexed position of Block within file
+	NumBlocks  int    // total number of Blocks in file
 }
 
-// packets are sent over the network
-type packet struct {
-	SRC	 	 string
-	DST 	 string
-	command  int
-	data     block
-	headers  []blockheader
+// Packets are sent over the network
+type Packet struct {
+	SRC     string
+	DST     string
+	CMD     int
+	Data    Block
+	Headers []BlockHeader
 }
 
 // filenodes compose a tree representation of the filesystem
@@ -70,50 +67,50 @@ type filenode struct {
 // Hold file and connection information
 // Syncronized access to individual datanode contents
 type datanode struct {
-	ID     		string
-	mu     		sync.Mutex
-	conn 	 	net.Conn
-	sender      chan packet
-	receiver	chan packet
-	listed 		bool
+	ID       string
+	mu       sync.Mutex
+	conn     net.Conn
+	sender   chan Packet
+	receiver chan Packet
+	listed   bool
+	size     uint64
 }
 
-
-func (dn *datanode) SendPacket(p packet) {
-//	dn.mu.Lock()
-	dn.sender <- p
-//	dn.mu.Unlock()
+func (dn *datanode) SendPacket(p Packet) {
+	//	dn.mu.Lock()
+	EncodePacket(dn.conn, p)
+	//	dn.mu.Unlock()
 }
 
 func (dn *datanode) SetListed(listed bool) {
-//	dn.mu.Lock()
+	//	dn.mu.Lock()
 	dn.listed = listed
-//	dn.mu.Unlock()
+	//	dn.mu.Unlock()
 	return
 }
 
 func (dn *datanode) GetListed() bool {
-//	dn.mu.Lock()
+	//	dn.mu.Lock()
 	listed := dn.listed
-//	dn.mu.Unlock()
+	//	dn.mu.Unlock()
 	return listed
 }
 
 func (dn *datanode) SetID(id string) {
-//	dn.mu.Lock()
+	//	dn.mu.Lock()
 	dn.ID = id
-//	dn.mu.Unlock()
+	//	dn.mu.Unlock()
 	return
 }
 
 func (dn *datanode) GetID() string {
-//	dn.mu.Lock()
+	//	dn.mu.Lock()
 	id := dn.ID
-//	dn.mu.Unlock()
+	//	dn.mu.Unlock()
 	return id
 }
 
-// reads incoming block headers into filesystem
+// reads incoming block Headers uint64o filesystem
 func HandleBlockHeaders() {
 	for h := range headerChannel {
 		MergeNode(h)
@@ -122,7 +119,7 @@ func HandleBlockHeaders() {
 
 // TODO duplicates(in upper level function)
 // TODO a more logical structure for local vs remote pathing
-func BlocksFromFile(localname, remotename string) []block {
+func BlocksFromFile(localname, remotename string) []Block {
 
 	info, err := os.Lstat(localname)
 	if err != nil {
@@ -144,21 +141,16 @@ func BlocksFromFile(localname, remotename string) []block {
 	}()
 	r := bufio.NewReader(fi)
 
-	// Create blocks
-
+	// Create Blocks
 	// TODO make this in parallel
-	// TODO this will be headers in the future
-	// TODO size bound
-	numBlocks := int((info.Size() / SIZEOFBLOCK)) + 1
-	blocks := make([]block, 0, numBlocks)
+	// TODO this will be Headers in the future
+	total := int((info.Size() / SIZEOFBLOCK) + 1)
+	bls := make([]Block, 0, total)
 
-	// make a write buffer
 	num := 0
-	//  size := 0
-
 	for {
 
-		// read a chunk from file into block data buffer
+		// read a chunk from file uint64o Block data buffer
 		buf := make([]byte, SIZEOFBLOCK)
 		w := bytes.NewBuffer(nil)
 
@@ -169,36 +161,57 @@ func BlocksFromFile(localname, remotename string) []block {
 		if n == 0 {
 			break
 		}
+
 		if _, err := w.Write(buf[:n]); err != nil {
 			panic(err)
 		}
-		fmt.Println(n)
 
-		// write full block to disc
-		// TODO multiple blocks chosen
+		// write full Block to disc
+		// TODO multiple Blocks chosen
+		if strings.Index(remotename, "/") != 0 {
+			remotename = "/" + remotename
+		}
 
-		h := blockheader{"DN1", remotename, n, num, numBlocks}
+		//choose optimal datanode
+		min_size := uint64(math.MaxUint64)
+		var min_node *datanode
+		for _, v := range datanodemap {
+			if v.size < min_size {
+				min_size = v.size
+				min_node = v
+			}
+		}
+
+		h := BlockHeader{min_node.ID, remotename, uint64(n), num, total}
 		data := make([]byte, 0, n)
 
 		data = w.Bytes()[0:n]
-		b := block{h, data}
-		blocks = append(blocks, b)
+		b := Block{h, data}
+		bls = append(bls, b)
 
 		//TODO flush block to datanode?
 
-		// generate new block
+		// generate new Block
 		num += 1
 
 	}
-	return blocks
+	return bls
+}
+
+func ContainsHeader(arr []BlockHeader, h BlockHeader) bool {
+	for _, v := range arr {
+		if h == v {
+			return true
+		}
+	}
+	return false
 }
 
 // Run function dynamically to construct filesystem
-//func MergeNode(master *Node, path string, block *Block)
 //TODO duplicates
-func MergeNode(h blockheader) {
+func MergeNode(h BlockHeader) {
 
-	path := h.filename
+	path := h.Filename
 	path_arr := strings.Split(path, "/")
 	q := root
 
@@ -218,10 +231,14 @@ func MergeNode(h blockheader) {
 				}
 			}
 			if exists {
-				// If file already been added, we add the blockheader to the map
+				// If file already been added, we add the BlockHeader to the map
 				if partial == path {
-					filemap[path] = append(filemap[path], h)
-					fmt.Println("adding header to filemap at " + path)
+					arr := filemap[path][h.BlockNum]
+					if !ContainsHeader(arr, h) {
+						filemap[path][h.BlockNum] = append(filemap[path][h.BlockNum], h)
+						datanodemap[h.DatanodeID].size += h.Size
+					}
+					fmt.Println("adding Block header # ", h.BlockNum, "to filemap at ", path)
 				}
 				//else it is a directory
 				continue
@@ -233,9 +250,11 @@ func MergeNode(h blockheader) {
 				*/
 				n := &filenode{partial, q, make([]*filenode, 0, 5)}
 				if partial == path {
-					filemap[path] = make([]blockheader, 0, 5)
-					filemap[path][0] = h
-					fmt.Println("creating blockheader at " + path)
+					filemap[path] = make(map[int][]BlockHeader)
+					filemap[path][h.BlockNum] = make([]BlockHeader, 0, 5)
+					filemap[path][h.BlockNum] = append(filemap[path][h.BlockNum], h)
+					datanodemap[h.DatanodeID].size += h.Size
+					fmt.Println("creating Block header # ", h.BlockNum, "to filemap at ", path)
 				}
 
 				n.parent = q
@@ -246,25 +265,26 @@ func MergeNode(h blockheader) {
 	}
 }
 
-func DistributeBlocks(blocks []block) {
-	for _, d := range blocks {
+func DistributeBlocks(bls []Block) {
+	fmt.Println("distributing ", len(bls), " bls")
+	for _, d := range bls {
 		//TODO sanity check
-		dn, ok := datanodemap[d.header.datanodeID]
+		dn, ok := datanodemap[d.Header.DatanodeID]
 		if !ok {
-			log.Printf("Error distributing block with datanodeID %s\n", d.header.datanodeID)
+			log.Printf("Error distributing Block with DatanodeID %s\n", d.Header.DatanodeID)
 			continue
 		}
 
-		p := new(packet)
-		p.DST = d.header.datanodeID
+		p := new(Packet)
+		p.DST = d.Header.DatanodeID
 		p.SRC = id
-		p.command = BLOCK
-		p.data = d
+		p.CMD = BLOCK
+		p.Data = Block{d.Header, d.Data}
 		dn.SendPacket(*p)
 	}
 }
 
-func EncodePacket(conn net.Conn, p packet) {
+func EncodePacket(conn net.Conn, p Packet) {
 	encoder := json.NewEncoder(conn)
 	err := encoder.Encode(p)
 	if err != nil {
@@ -272,10 +292,19 @@ func EncodePacket(conn net.Conn, p packet) {
 	}
 }
 
+func LogJSON(key interface{}) {
+	outFile, err := os.Create("/home/sjarvie/log.json")
+	CheckError(err)
+	encoder := json.NewEncoder(outFile)
+	err = encoder.Encode(key)
+	CheckError(err)
+	outFile.Close()
+}
+
 func (dn *datanode) DecodePackets(conn net.Conn) {
 
 	for {
-		var p packet
+		var p Packet
 		decoder := json.NewDecoder(conn)
 		err := decoder.Decode(&p)
 		if err != nil {
@@ -283,85 +312,83 @@ func (dn *datanode) DecodePackets(conn net.Conn) {
 			return
 		}
 
-		if (p.SRC != "") {
+		if p.SRC != "" {
 			dn.receiver <- p
 		}
 
-		
-		
 	}
-	
+
 }
 
-
-
-func  (dn *datanode) Handle(p packet) {
-	fmt.Println("Handling packet")
+func (dn *datanode) Handle(p Packet) {
 	listed := dn.GetListed()
 
-	r := packet
-	r.SRC = id
+	r := Packet{id, p.SRC, 1, *new(Block), make([]BlockHeader, 0)}
+	r.SRC = "NN"
 	r.DST = p.SRC
+	r.CMD = 1
 
-
-	if p.command == HB {
-
-		// check if block list has been retrieved already
+	switch p.CMD {
+	case HB:
 		// TODO make periodic
 		if !listed {
-			r.command = LIST
+			r.CMD = LIST
 		} else {
-			r.command = ACK
+			r.CMD = ACK
 		}
 
-	} else if p.command == LIST {
+	case LIST:
 
 		fmt.Printf("Listing directory contents from %s \n", p.SRC)
-		list := p.headers
-		//TODO block merging ?
-		for _, b := range list {
-			headerChannel <- b
+		list := p.Headers
+		//TODO Block merging ?
+		for _, h := range list {
+			fmt.Println(h)
+			headerChannel <- h
 		}
 		//TODO conditional check(errors)
-		//TODO syncronize any access to datanodes!
 		dn.SetListed(true)
+		r.CMD = ACK
 
-		r.command = ACK
-
+	case BLOCKACK:
+		// receive acknowledgement for single Block header as being stored
+		fmt.Println("Received BLOCKACK")
+		if p.Headers != nil && len(p.Headers) == 1 {
+			headerChannel <- p.Headers[0]
+		}
+		r.CMD = ACK
 	}
+
 	// send response
-	fmt.Println("sending", *r)
-	EncodePacket(dn.conn,*r)
+
+	EncodePacket(dn.conn, r)
 }
 
-func CheckConnection(conn net.Conn, p packet){
+func CheckConnection(conn net.Conn, p Packet) {
 	dn, ok := datanodemap[p.SRC]
 	if !ok {
 		fmt.Println("Adding new datanode :", p.SRC)
-		datanodemap[p.SRC] = &datanode{p.SRC, sync.Mutex{}, conn, make(chan packet), make(chan packet), false}
-	}else {
+		datanodemap[p.SRC] = &datanode{p.SRC, sync.Mutex{}, conn, make(chan Packet), make(chan Packet), false, 0}
+	} else {
 		fmt.Printf("Datanode %s reconnected \n", dn.ID)
 		dn.conn = conn
 	}
 }
 
-
-func (dn *datanode) HandleConnection(){
+func (dn *datanode) HandleConnection() {
 
 	go dn.DecodePackets(dn.conn)
 	for r := range dn.receiver {
-		fmt.Println("decoding packet ", r)
 		dn.Handle(r)
 	}
 }
 
 func HandleConnection(conn net.Conn) {
 
-	// receive first packet and add datanode if necessary
-	var p packet
+	// receive first Packet and add datanode if necessary
+	var p Packet
 	decoder := json.NewDecoder(conn)
 	err := decoder.Decode(&p)
-	fmt.Printf("ID %s Command %d \n", p.SRC, p.command)
 	if err != nil {
 		log.Println("error receiving")
 	}
@@ -370,29 +397,44 @@ func HandleConnection(conn net.Conn) {
 	// start datanode
 
 	dn := datanodemap[p.SRC]
-	fmt.Println("dn", *dn)
 	dn.HandleConnection()
 }
 
-// interact with user
+// uint64eract with user
 func ReceiveInput() {
-	fmt.Println("Enter file to send")
-	var localname string
-	fmt.Scan(&localname)
+	for {
+		fmt.Println("Enter command to send")
+		
+		in := bufio.NewReader(os.Stdin)
+		input, _ := in.ReadString('\n')
+		arr := strings.Split(input, " ")
 
-	blocks := BlocksFromFile(localname, localname)
-	DistributeBlocks(blocks)
+		if !(len(arr) == 2 && (arr[0] == "put" || arr[0] == "get")) {
+			fmt.Printf("Incorrect command\n Valid Commands: \n \t put [filename] \n \t get [filename] \n")
+			continue
+		}
+
+		if arr[0] == "put" {
+			bls := BlocksFromFile(input, input)
+			DistributeBlocks(bls)
+		} else {
+			fmt.Printf("Retrieving file")
+		}
+
+	}
 }
 
 func main() {
 
 	// setup filesystem
 	root = &filenode{"/", nil, make([]*filenode, 0, 5)}
-	filemap = make(map[string][]blockheader)
-	// go HandleBlockHeaders()
+	filemap = make(map[string]map[int][]BlockHeader)
+	headerChannel = make(chan BlockHeader)
 
-	// setup user interaction
-	//go ReceiveInput()
+	go HandleBlockHeaders()
+
+	// setup user uint64eraction
+	go ReceiveInput()
 
 	id = "NN"
 	listener, err := net.Listen("tcp", SERVERADDR)

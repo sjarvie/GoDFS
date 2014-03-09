@@ -7,116 +7,170 @@ import (
 	"net"
 	"os"
 	"time"
+	"strconv"
 )
 
 const SERVERADDR = "localhost:8080"
 const SIZEOFBLOCK = 1000
 
-var id, blockpath string // command line arguments
+var id, root string // CMD line arguments
 var state = HB
+
 const (
-	HB = iota
-	LIST = iota
-	ACK = iota
+	HB    = iota
+	LIST  = iota
+	ACK   = iota
 	BLOCK = iota
+	BLOCKACK = iota
 )
 
-// A file is composed of one or more blocks
-type block struct {
-	header blockheader
-	data   []byte
+// A file is composed of one or more Blocks
+type Block struct {
+	Header BlockHeader
+	Data   []byte
 }
 
-// block headers hold block data information
-type blockheader struct {
-	datanodeID                   string
-	filename                     string //the filename including the path "/data/test.txt"
-	size, sequenceNum, numBlocks int    //size in bytes, the order of the chunk within file
-	//TODO checksum
+// Block Headers hold Block Data information
+type BlockHeader struct {
+	DatanodeID                   string
+	Filename                     string //the Filename including the path "/data/test.txt"
+	Size    			int64 //Size of Block in bytes
+	BlockNum  int // the 0 indexed position of Block within file
+	NumBlocks int  // total number of Blocks in file
 }
 
-// packets are sent over the network
-type packet struct {
-	SRC		 string
-	DST		 string
-	command  int
-	data     block
-	headers  []blockheader
+// Packets are sent over the network
+type Packet struct {
+	SRC     string
+	DST     string
+	CMD     int
+	Data    Block
+	Headers []BlockHeader
 }
 
-// receive a packet and send to syncronized channel
-func Receivepacket(conn net.Conn, p chan packet) {
-	decoder := json.NewDecoder(conn)
+// receive a Packet and send to syncronized channel
+func ReceivePacket(conn net.Conn, p chan Packet) {
 	for {
-		var r packet
-		decoder.Decode(&r)
-		fmt.Println(r)
-		p <- r
+		decoder := json.NewDecoder(conn)
+		r := new(Packet)
+		decoder.Decode(r)
+		p <- *r
 	}
 }
-
 
 // change state to handle request from server
-func HandleResponse(r packet) {
-	if r.command == ACK {
-		state = HB
-	} else if r.command == LIST {
-		state = LIST
-	}
-	fmt.Println("state now ", state)
-
-}
-
-// handle a state's action
-func PerformAction(encoder *json.Encoder) {
-	p := new(packet)
+func SendHeartBeat(encoder *json.Encoder) {
+	p := new(Packet)
 	p.SRC = id
-	p.DST = "NN" //TODO better naming conventions
-
-	if state == HB {
-		p.command = HB
-	} else if state == LIST {
-		fmt.Println("Sending block headers")
-		list := GetBlockHeaders()
-		p.headers = make([]blockheader, len(list))
-
-		for i, b := range list {
-			p.headers[i] = b
-		}
-		p.command = LIST
-	}
-	//fmt.Println("Sending Packet : ", *p)
+	p.DST = "NN"
+	p.CMD = HB
 	encoder.Encode(p)
 }
 
-//func blocksFromFile
+// handle a state's action
+func HandleResponse(p Packet, encoder *json.Encoder) {
+	r := new(Packet)
+	r.SRC = id
+	r.DST = "NN" //TODO better naming conventions
+	fmt.Println("Received ", p)
 
-// List block contents
-// Later add recursion and switch to blocks
-func GetBlockHeaders() []blockheader {
+	switch p.CMD {
+	case ACK:
+		r.CMD = HB
+	case LIST:
+		fmt.Println("Sending Block Headers")
+		list := GetBlockHeaders()
+		r.Headers = make([]BlockHeader, len(list))
 
-	list, err := ioutil.ReadDir(blockpath)
+		for i, b := range list {
+			r.Headers[i] = b
+		}
+		r.CMD = LIST
+
+	case BLOCK:
+		fmt.Println("Received Block ",  p.Data)
+		r.CMD = BLOCKACK
+
+
+		WriteBlock(p.Data)
+
+		p.CMD = BLOCKACK
+		r.Headers = make([]BlockHeader,0,2)
+		r.Headers = append(r.Headers, p.Data.Header)
+		LogJSON(*r)
+	}
+	encoder.Encode(*r)
+}
+
+
+func WriteBlock(b Block)  {
+	list, err := ioutil.ReadDir(root)
+	h := b.Header 
+	fname := h.Filename +"/"+ strconv.Itoa(h.BlockNum)
+
+	for _, dir := range list {
+		if dir.Name() == h.Filename{
+			SaveJSON(root + fname, b)
+			return 
+		}
+	}
+	// create directory
+	err = os.Mkdir(root + h.Filename, 0700)
+	if (err != nil ){
+		fmt.Println("path error : ", err)
+		return 
+	}
+
+	fname = h.Filename +"/"+ strconv.Itoa(h.BlockNum)
+	SaveJSON(root + fname, b)
+	fmt.Println("wrote Block to disc")
+
+	return 
+
+}
+
+
+
+// List Block contents
+// Later add recursion and switch to Blocks
+func GetBlockHeaders() []BlockHeader {
+
+	list, err := ioutil.ReadDir(root) 
+
 	CheckError(err)
-	headers := make([]blockheader, 0, len(list))
+	headers := make([]BlockHeader, 0, len(list))
 
-	for i, f := range list {
-		var b block
-		Readjson(f.Name(), &b)
-		headers[i] = b.header
+	// each directory is Filename, which holds Block files within
+	for _, dir := range list {
+
+		fmt.Println(dir.Name())
+
+		files, err := ioutil.ReadDir(dir.Name())
+		CheckError(err)
+
+		for _,f := range files {
+			var b Block
+
+			ReadJSON(root + "/"+ dir.Name() + "/" + f.Name(), &b)
+			headers = append(headers, b.Header)
+		}
 	}
 	return headers
 }
 
-func Readjson(fname string, key interface{}) {
+func ReadJSON(fname string, key interface{}) {
 	fi, err := os.Open(fname)
-	CheckError(err)
+	if err != nil {
+		fmt.Println("Couldnt Read JSON ")
+		return
+	}
 	decoder := json.NewDecoder(fi)
 	err = decoder.Decode(key)
 	CheckError(err)
 	fi.Close()
 }
 
-func Writejson(fileName string, key interface{}) {
+func SaveJSON(fileName string, key interface{}) {
 	outFile, err := os.Create(fileName)
 	CheckError(err)
 	encoder := json.NewEncoder(outFile)
@@ -125,33 +179,44 @@ func Writejson(fileName string, key interface{}) {
 	outFile.Close()
 }
 
+func LogJSON(key interface{}) {
+	outFile, err := os.Create("/home/sjarvie/log.json")
+	CheckError(err)
+	encoder := json.NewEncoder(outFile)
+	err = encoder.Encode(key)
+	CheckError(err)
+	outFile.Close()
+}
+
+
 func main() {
 
 	if len(os.Args) != 3 {
-	    fmt.Println("Usage: ", os.Args[0], "id path")
+	    fmt.Println("Usage: datanode id path")
 	    os.Exit(1)
 	}
 	id = os.Args[1]
-	blockpath = os.Args[2]
+	root = os.Args[2]
+	err := os.Chdir(root)
+	CheckError(err)
 
 	conn, err := net.Dial("tcp", SERVERADDR)
 	CheckError(err)
 
 	encoder := json.NewEncoder(conn)
 
-	packetChannel := make(chan packet)
-	tick := time.Tick(2* time.Second)
+	PacketChannel := make(chan Packet)
+	tick := time.Tick(2 * time.Second)
 
-	go Receivepacket(conn, packetChannel)
+	go ReceivePacket(conn, PacketChannel)
 
 	for {
 		select {
-			case <-tick:
-				PerformAction(encoder)
-			case r := <-packetChannel:
-				HandleResponse(r)
-				PerformAction(encoder)
-				time.Sleep(1*time.Second)
+		case <-tick:
+			SendHeartBeat(encoder)
+		case r := <-PacketChannel:
+			HandleResponse(r, encoder)
+			time.Sleep(1 * time.Second)
 		}
 
 	}
