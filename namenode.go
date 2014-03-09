@@ -69,7 +69,7 @@ type filenode struct {
 type datanode struct {
 	ID       string
 	mu       sync.Mutex
-	conn     net.Conn
+	conn     *net.Conn
 	sender   chan Packet
 	receiver chan Packet
 	listed   bool
@@ -78,7 +78,8 @@ type datanode struct {
 
 func (dn *datanode) SendPacket(p Packet) {
 	//	dn.mu.Lock()
-	EncodePacket(dn.conn, p)
+	EncodePacket(*dn.conn, p)
+	LogJSON(p)
 	//	dn.mu.Unlock()
 }
 
@@ -280,6 +281,8 @@ func DistributeBlocks(bls []Block) {
 		p.SRC = id
 		p.CMD = BLOCK
 		p.Data = Block{d.Header, d.Data}
+		LogJSON(*p)
+
 		dn.SendPacket(*p)
 	}
 }
@@ -293,7 +296,7 @@ func EncodePacket(conn net.Conn, p Packet) {
 }
 
 func LogJSON(key interface{}) {
-	outFile, err := os.Create("/home/sjarvie/log.json")
+	outFile, err := os.Create("/home/sjarvie/logNN.json")
 	CheckError(err)
 	encoder := json.NewEncoder(outFile)
 	err = encoder.Encode(key)
@@ -361,23 +364,23 @@ func (dn *datanode) Handle(p Packet) {
 
 	// send response
 
-	EncodePacket(dn.conn, r)
+	EncodePacket(*dn.conn, r)
 }
 
 func CheckConnection(conn net.Conn, p Packet) {
 	dn, ok := datanodemap[p.SRC]
 	if !ok {
 		fmt.Println("Adding new datanode :", p.SRC)
-		datanodemap[p.SRC] = &datanode{p.SRC, sync.Mutex{}, conn, make(chan Packet), make(chan Packet), false, 0}
+		datanodemap[p.SRC] = &datanode{p.SRC, sync.Mutex{}, &conn, make(chan Packet), make(chan Packet), false, 0}
 	} else {
 		fmt.Printf("Datanode %s reconnected \n", dn.ID)
-		dn.conn = conn
+		dn.conn = &conn
 	}
 }
 
 func (dn *datanode) HandleConnection() {
 
-	go dn.DecodePackets(dn.conn)
+	go dn.DecodePackets(*dn.conn)
 	for r := range dn.receiver {
 		dn.Handle(r)
 	}
@@ -404,18 +407,25 @@ func HandleConnection(conn net.Conn) {
 func ReceiveInput() {
 	for {
 		fmt.Println("Enter command to send")
-		
-		in := bufio.NewReader(os.Stdin)
-		input, _ := in.ReadString('\n')
-		arr := strings.Split(input, " ")
 
-		if !(len(arr) == 2 && (arr[0] == "put" || arr[0] == "get")) {
+		var cmd string
+		var localname string
+		fmt.Scan(&cmd)
+		fmt.Scan(&localname)
+		
+		if !(cmd == "put" || cmd == "get") {
 			fmt.Printf("Incorrect command\n Valid Commands: \n \t put [filename] \n \t get [filename] \n")
 			continue
 		}
 
-		if arr[0] == "put" {
-			bls := BlocksFromFile(input, input)
+		_, err := os.Lstat(localname)
+		if err != nil {
+			fmt.Println("Invalid File")
+			continue
+		}
+
+		if cmd == "put" {
+			bls := BlocksFromFile(localname, localname)
 			DistributeBlocks(bls)
 		} else {
 			fmt.Printf("Retrieving file")

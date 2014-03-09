@@ -180,7 +180,7 @@ func SaveJSON(fileName string, key interface{}) {
 }
 
 func LogJSON(key interface{}) {
-	outFile, err := os.Create("/home/sjarvie/log.json")
+	outFile, err := os.Create("/home/sjarvie/log"+id+".json")
 	CheckError(err)
 	encoder := json.NewEncoder(outFile)
 	err = encoder.Encode(key)
@@ -216,7 +216,7 @@ func main() {
 			SendHeartBeat(encoder)
 		case r := <-PacketChannel:
 			HandleResponse(r, encoder)
-			time.Sleep(1 * time.Second)
+			time.Sleep(2 * time.Second)
 		}
 
 	}
@@ -226,6 +226,6 @@ func main() {
 func CheckError(err error) {
 	if err != nil {
 		fmt.Println("Fatal error ", err.Error())
-		//os.Exit(1)
+		os.Exit(1)
 	}
 }
