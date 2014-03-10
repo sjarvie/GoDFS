@@ -78,7 +78,6 @@ func HandleResponse(p Packet, encoder *json.Encoder) {
 	case ACK:
 		r.CMD = HB
 	case LIST:
-		fmt.Println("Sending Block Headers")
 		list := GetBlockHeaders()
 		r.Headers = make([]BlockHeader, len(list))
 
@@ -98,6 +97,12 @@ func HandleResponse(p Packet, encoder *json.Encoder) {
 		r.Headers = make([]BlockHeader,0,2)
 		r.Headers = append(r.Headers, p.Data.Header)
 		LogJSON(*r)
+
+	case GETBLOCK:
+		b := BlockFromHeader(p.Headers[0])
+		r.CMD = BLOCK
+		r.Data = b
+		fmt.Println("Sending Block Packet", *r)
 	}
 	encoder.Encode(*r)
 }
@@ -161,6 +166,28 @@ func GetBlockHeaders() []BlockHeader {
 }
 
 
+
+func BlockFromHeader(h BlockHeader) Block{
+	
+	list, err := ioutil.ReadDir(root) 
+	CheckError(err)
+	fname := h.Filename +"/"+ strconv.Itoa(h.BlockNum)
+
+	for _, dir := range list {
+		var b Block
+
+		fmt.Println("Looking for directory ", h.Filename)
+		fmt.Println("Comparing to ", "/" + dir.Name())
+		if "/" + dir.Name() == h.Filename{
+			ReadJSON(root + fname, &b)
+			fmt.Println("Found Block!")
+			return b 
+		}
+	}
+	fmt.Println("Block not found!")
+	var errBlock Block
+	return errBlock
+}
 
 
 
@@ -231,7 +258,6 @@ func main() {
 			SendHeartBeat(encoder)
 		case r := <-PacketChannel:
 			HandleResponse(r, encoder)
-			time.Sleep(2 * time.Second)
 		}
 
 	}

@@ -21,6 +21,9 @@ var headerChannel chan BlockHeader
 var sendChannel chan Packet
 var sendMap map[string] *json.Encoder 		// maps DatanodeIDs to their connections
 var sendMapLock sync.Mutex
+var blockReceiverChannel chan Block     // used to fetch blocks on user request
+var blockRequestorChannel chan BlockHeader
+
 var root *filenode
 var filemap map[string](map[int][]BlockHeader) //TODO combine with Nodes
 var datanodemap map[string]*datanode
@@ -99,10 +102,6 @@ func (s *datanodeSorter) Swap(i, j int) {
 func (s *datanodeSorter) Less(i, j int) bool {
 	return s.by(&s.nodes[i], &s.nodes[j])
 }
-
-
-
-
 
 
 func (dn *datanode) SendPacket(p Packet) {
@@ -297,11 +296,11 @@ func MergeNode(h BlockHeader) {
 				    TODO use Node for file_map rather than string
 				    requires a lookup structure or function
 				*/
-				n := &filenode{partial, q, make([]*filenode, 0, 5)}
+				n := &filenode{partial, q, make([]*filenode, 5, 5)}
 				if partial == path {
 					filemap[path] = make(map[int][]BlockHeader)
-					filemap[path][h.BlockNum] = make([]BlockHeader, 0, 5)
-					filemap[path][h.BlockNum] = append(filemap[path][h.BlockNum], h)
+					filemap[path][h.BlockNum] = make([]BlockHeader, 5, 5)
+					filemap[path][h.BlockNum][0] =  h
 					datanodemap[h.DatanodeID].size += h.Size
 					fmt.Println("creating Block header # ", h.BlockNum, "to filemap at ", path)
 				}
@@ -358,10 +357,7 @@ func LogJSON(key interface{}) {
 func (dn *datanode) Handle(p Packet) {
 	listed := dn.GetListed()
 
-	r := Packet{id, p.SRC, 1, *new(Block), make([]BlockHeader, 0)}
-	r.SRC = "NN"
-	r.DST = p.SRC
-	r.CMD = 1
+	r := Packet{id, p.SRC, ACK, *new(Block), make([]BlockHeader, 0)}
 
 	switch p.CMD {
 	case HB:
@@ -392,6 +388,10 @@ func (dn *datanode) Handle(p Packet) {
 			headerChannel <- p.Headers[0]
 		}
 		r.CMD = ACK
+	
+	case BLOCK:
+		blockReceiverChannel <- p.Data
+		r.CMD = ACK
 	}
 
 	// send response
@@ -414,10 +414,6 @@ func CheckConnection(conn net.Conn, p Packet) {
 	dn.Handle(p)
 }
 
-func (dn *datanode) HandleConnection(conn net.Conn) {
-
-	
-}
 
 func HandleConnection(conn net.Conn) {
 
@@ -443,36 +439,136 @@ func HandleConnection(conn net.Conn) {
 	}
 }
 
+
+func ConstructFile(localname, remotename string, headers []BlockHeader) {
+	outFile, err := os.Create(localname)
+	CheckError(err)
+	w := bufio.NewWriter(outFile)
+	
+	// send a request packet and wait for response block before fetching next block
+	for _, h:= range headers {
+
+		p := new(Packet)
+		p.SRC = id
+		p.DST = h.DatanodeID
+		p.CMD = GETBLOCK
+		p.Headers = []BlockHeader{h}
+		fmt.Println("Adding to sendchannel ", *p)
+		sendChannel <- *p
+		b := <- blockReceiverChannel
+		if b.Header == h {
+			if _, err := w.Write(b.Data[:b.Header.Size]); err != nil {
+			panic(err)
+			}
+		}
+		fmt.Println("Printed block ", b)
+
+	}
+	w.Flush()
+ 	outFile.Close()
+
+
+
+}
+
 // uint64eract with user
 func ReceiveInput() {
 	for {
 		fmt.Println("Enter command to send")
 
 		var cmd string
-		var localname string
+		var file1 string
+		var file2 string
 		fmt.Scan(&cmd)
-		fmt.Scan(&localname)
+		fmt.Scan(&file1)
+		fmt.Scan(&file2)
 		
 		if !(cmd == "put" || cmd == "get") {
-			fmt.Printf("Incorrect command\n Valid Commands: \n \t put [filename] \n \t get [filename] \n")
+			fmt.Printf("Incorrect command\n Valid Commands: \n \t put [localinput] [remoteoutput] \n \t get [remoteinput] [localoutput] \n")
 			continue
 		}
 
-		_, err := os.Lstat(localname)
-		if err != nil {
-			fmt.Println("Invalid File")
-			continue
-		}
+
+
+		
 
 		if cmd == "put" {
-			bls := BlocksFromFile(localname, localname)
+			localname := file1
+			remotename := file2
+			_, err := os.Lstat(localname)
+			if err != nil {
+				fmt.Println("Invalid File")
+				continue
+			}
+			bls := BlocksFromFile(localname, remotename)
 			DistributeBlocks(bls)
 		} else {
-			fmt.Printf("Retrieving file")
+			remotename := file1
+			localname := file2
+
+			fmt.Println("Retrieving file")
+			headernumbers,ok := filemap[remotename]
+			if !ok  || len(headernumbers) == 0 {
+				fmt.Println("Remote file not found in system")
+				continue
+			}
+
+			num := headernumbers[0][0].NumBlocks
+			fmt.Println("NumBlocks ", num)
+			//TODO ensure correct blocks
+			if len(headernumbers) != num {
+				fmt.Println("Could not find all blocks")
+			}
+
+
+			fetchHeaders := make([]BlockHeader, num, num)
+
+
+			i := 0
+			for i < num {
+
+				headers := filemap[remotename][i]
+				old_i := i
+
+				for _,h := range headers {
+					fmt.Println(h)
+					if h.BlockNum == i {
+
+						// TODO this can break if multiple calls are made
+						fetchHeaders[i] = h
+						fmt.Println("adding request for header ", h)
+						i ++
+						break
+					}
+				}
+				if i == old_i { 
+					fmt.Println("Could not find blockNum ", i)
+					return
+				}
+				
+			}
+
+			fmt.Println("ConstructFile")
+
+			ConstructFile(localname, remotename, fetchHeaders)
+
+
+			
+			
+
+
+
+
+
 		}
 
 	}
 }
+
+
+
+
+
 
 func main() {
 
@@ -480,6 +576,8 @@ func main() {
 	root = &filenode{"/", nil, make([]*filenode, 0, 5)}
 	filemap = make(map[string]map[int][]BlockHeader)
 	headerChannel = make(chan BlockHeader)
+	blockReceiverChannel  = make(chan Block)     // used to fetch blocks on user request
+
 
 	sendChannel = make(chan Packet)
 	sendMap = make(map[string]*json.Encoder)
