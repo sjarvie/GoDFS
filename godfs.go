@@ -1,13 +1,11 @@
 package main
 
-
 import (
 	"fmt"
-	"os"
-	"github.com/sjarvie/godfs/namenode"
 	"github.com/sjarvie/godfs/datanode"
-	)
-
+	"github.com/sjarvie/godfs/namenode"
+	"os"
+)
 
 func main() {
 
@@ -15,16 +13,14 @@ func main() {
 		fmt.Printf("Invalid command, usage :\n \t godfs namenode \n \t godfs datanode [datanodeID] [absolute_block_path]  \n")
 		os.Exit(1)
 	}
-	
-
 
 	cmd := os.Args[1]
-	
+
 	if cmd == "namenode" {
 		namenode.Init()
 	} else if cmd == "datanode" {
 		id := os.Args[2]
 		fspath := os.Args[3]
-		datanode.Init(id,fspath)
-	} 
+		datanode.Init(id, fspath)
+	}
 }

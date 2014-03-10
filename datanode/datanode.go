@@ -13,7 +13,7 @@ import (
 const SERVERADDR = "localhost:8080"
 const SIZEOFBLOCK = 1000
 
-var id, root string // CMD line arguments
+var id, root string // command line arguments
 var state = HB
 
 const (
@@ -71,8 +71,7 @@ func SendHeartBeat(encoder *json.Encoder) {
 func HandleResponse(p Packet, encoder *json.Encoder) {
 	r := new(Packet)
 	r.SRC = id
-	r.DST = "NN" //TODO better naming conventions
-	fmt.Println("Received ", p)
+	r.DST = p.SRC
 
 	switch p.CMD {
 	case ACK:
@@ -218,7 +217,6 @@ func Init(dn_id, fspath string) {
 	id = dn_id
 	root = fspath
 
-	
 	err := os.Chdir(root)
 	CheckError(err)
 

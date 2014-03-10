@@ -25,7 +25,7 @@ var blockReceiverChannel chan Block // used to fetch blocks on user request
 var blockRequestorChannel chan BlockHeader
 
 var root *filenode
-var filemap map[string](map[int][]BlockHeader) //TODO combine with Nodes
+var filemap map[string](map[int][]BlockHeader)
 var datanodemap map[string]*datanode
 
 var id string
@@ -148,8 +148,6 @@ func HandleBlockHeaders() {
 	}
 }
 
-// TODO duplicates(in upper level function)
-// TODO a more logical structure for local vs remote pathing
 func BlocksFromFile(localname, remotename string) []Block {
 
 	var bls []Block
@@ -162,7 +160,6 @@ func BlocksFromFile(localname, remotename string) []Block {
 	if err != nil {
 		panic(err)
 	}
-	// TODO sanity checks
 	//if (info == nil || info.Size == 0 ){
 	//}
 
@@ -179,8 +176,6 @@ func BlocksFromFile(localname, remotename string) []Block {
 	r := bufio.NewReader(fi)
 
 	// Create Blocks
-	// TODO make this in parallel
-	// TODO this will be Headers in the future
 	total := int((info.Size() / SIZEOFBLOCK) + 1)
 	bls = make([]Block, 0, total)
 
@@ -219,7 +214,6 @@ func BlocksFromFile(localname, remotename string) []Block {
 		}
 
 		// write full Block to disc
-		// TODO multiple Blocks chosen
 		if strings.Index(remotename, "/") != 0 {
 			remotename = "/" + remotename
 		}
@@ -233,8 +227,6 @@ func BlocksFromFile(localname, remotename string) []Block {
 		data = w.Bytes()[0:n]
 		b := Block{h, data}
 		bls = append(bls, b)
-
-		//TODO flush block to datanode?
 
 		// generate new Block
 		num += 1
@@ -289,9 +281,7 @@ func MergeNode(h BlockHeader) {
 			} else {
 
 				/*  if we are at file, create the map entry
-				    TODO use Node for file_map rather than string
-				    requires a lookup structure or function
-				*/
+				 */
 				n := &filenode{partial, q, make([]*filenode, 5, 5)}
 				if partial == path {
 					filemap[path] = make(map[int][]BlockHeader)
@@ -312,7 +302,6 @@ func MergeNode(h BlockHeader) {
 func DistributeBlocks(bls []Block) {
 	fmt.Println("distributing ", len(bls), " bls")
 	for _, d := range bls {
-		//TODO sanity check
 		_, ok := datanodemap[d.Header.DatanodeID]
 		if !ok {
 			log.Printf("Error distributing Block with DatanodeID %s\n", d.Header.DatanodeID)
@@ -356,7 +345,6 @@ func (dn *datanode) Handle(p Packet) {
 
 	switch p.CMD {
 	case HB:
-		// TODO make periodic
 		if !listed {
 			r.CMD = LIST
 		} else {
@@ -367,12 +355,10 @@ func (dn *datanode) Handle(p Packet) {
 
 		fmt.Printf("Listing directory contents from %s \n", p.SRC)
 		list := p.Headers
-		//TODO Block merging ?
 		for _, h := range list {
 			fmt.Println(h)
 			headerChannel <- h
 		}
-		//TODO conditional check(errors)
 		dn.SetListed(true)
 		r.CMD = ACK
 
@@ -502,7 +488,6 @@ func ReceiveInput() {
 
 			num := headernumbers[0][0].NumBlocks
 			fmt.Println("NumBlocks ", num)
-			//TODO ensure correct blocks
 			if len(headernumbers) != num {
 				fmt.Println("Could not find all blocks")
 			}
@@ -519,7 +504,6 @@ func ReceiveInput() {
 					fmt.Println(h)
 					if h.BlockNum == i {
 
-						// TODO this can break if multiple calls are made
 						fetchHeaders[i] = h
 						fmt.Println("adding request for header ", h)
 						i++
