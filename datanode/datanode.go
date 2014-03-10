@@ -1,55 +1,62 @@
+// Package datanode contains the functionality to run a datanode in GoDFS
+// usage :  godfs datanode [ID] [Block Filesystem Path]
 package datanode
 
 import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
 const SERVERADDR = "localhost:8080"
 const SIZEOFBLOCK = 1000
 
-var id, root string // command line arguments
-var state = HB
+var id string   // datanode id
+var root string // root of the block filesystem
+var state = HB  // internal statemachine
 
+// commands for node communication
 const (
-	HB       = iota
-	LIST     = iota
-	ACK      = iota
-	BLOCK    = iota
-	BLOCKACK = iota
-	GETBLOCK = iota
+	HB       = iota // heartbeat
+	LIST     = iota // list directorys
+	ACK      = iota // acknowledgement
+	BLOCK    = iota // handle the including Block
+	BLOCKACK = iota // notifcation that Block was written to disc
+	GETBLOCK = iota // request to retrieve a Block
 )
 
 // A file is composed of one or more Blocks
 type Block struct {
-	Header BlockHeader
-	Data   []byte
+	Header BlockHeader // metadata
+	Data   []byte      // data contents
 }
 
-// Block Headers hold Block Data information
+// Blockheaders hold Block metadata
 type BlockHeader struct {
-	DatanodeID string
-	Filename   string //the Filename including the path "/data/test.txt"
-	Size       int64  //Size of Block in bytes
+	DatanodeID string // ID of datanode which holds the block
+	Filename   string //the remote name of the block including the path "/test/0"
+	Size       int64  // size of Block in bytes
 	BlockNum   int    // the 0 indexed position of Block within file
 	NumBlocks  int    // total number of Blocks in file
 }
 
 // Packets are sent over the network
 type Packet struct {
-	SRC     string
-	DST     string
-	CMD     int
-	Data    Block
-	Headers []BlockHeader
+	SRC     string        // source ID
+	DST     string        // destination ID
+	CMD     int           // command for the handler
+	Data    Block         // optional Block
+	Headers []BlockHeader // optional Blockheader list
 }
 
-// receive a Packet and send to syncronized channel
+// ReceivePacket decodes a packet and adds it to the handler channel
+// for processing by the datanode
 func ReceivePacket(decoder *json.Decoder, p chan Packet) {
 	for {
 		r := new(Packet)
@@ -58,8 +65,9 @@ func ReceivePacket(decoder *json.Decoder, p chan Packet) {
 	}
 }
 
-// change state to handle request from server
-func SendHeartBeat(encoder *json.Encoder) {
+// SendHeartbeat is used to notify the namenode of a valid connection
+// on a periodic basis
+func SendHeartbeat(encoder *json.Encoder) {
 	p := new(Packet)
 	p.SRC = id
 	p.DST = "NN"
@@ -67,7 +75,8 @@ func SendHeartBeat(encoder *json.Encoder) {
 	encoder.Encode(p)
 }
 
-// handle a state's action
+// HandleResponse delegates actions to perform based on the
+// contents of a recieved Packet, and encodes a response
 func HandleResponse(p Packet, encoder *json.Encoder) {
 	r := new(Packet)
 	r.SRC = id
@@ -84,27 +93,22 @@ func HandleResponse(p Packet, encoder *json.Encoder) {
 			r.Headers[i] = b
 		}
 		r.CMD = LIST
-
 	case BLOCK:
-		fmt.Println("Received Block ", p.Data)
 		r.CMD = BLOCKACK
-
 		WriteBlock(p.Data)
-
-		p.CMD = BLOCKACK
 		r.Headers = make([]BlockHeader, 0, 2)
 		r.Headers = append(r.Headers, p.Data.Header)
-		LogJSON(*r)
 
 	case GETBLOCK:
 		b := BlockFromHeader(p.Headers[0])
 		r.CMD = BLOCK
 		r.Data = b
-		fmt.Println("Sending Block Packet", *r)
 	}
 	encoder.Encode(*r)
 }
 
+// WriteBlock performs all functionality necessary to write a Block b
+// to the local filesystem
 func WriteBlock(b Block) {
 	list, err := ioutil.ReadDir(root)
 	h := b.Header
@@ -114,7 +118,7 @@ func WriteBlock(b Block) {
 		fmt.Println("Looking for directory ", h.Filename)
 		fmt.Println("Comparing to ", dir.Name())
 		if "/"+dir.Name() == h.Filename {
-			SaveJSON(root+fname, b)
+			WriteJSON(root+fname, b)
 			return
 		}
 	}
@@ -126,15 +130,14 @@ func WriteBlock(b Block) {
 	}
 
 	fname = h.Filename + "/" + strconv.Itoa(h.BlockNum)
-	SaveJSON(root+fname, b)
-	fmt.Println("wrote Block to disc")
-
+	WriteJSON(root+fname, b)
+	log.Println("Wrote Block ", fname, "to disc")
 	return
 
 }
 
-// List Block contents
-// Later add recursion and switch to Blocks
+// GetBlockHeaders retrieves the list of all Blockheaders found within
+// the filesystem specified by the user.
 func GetBlockHeaders() []BlockHeader {
 
 	list, err := ioutil.ReadDir(root)
@@ -148,70 +151,80 @@ func GetBlockHeaders() []BlockHeader {
 		fmt.Println(dir.Name())
 
 		files, err := ioutil.ReadDir(dir.Name())
-		CheckError(err)
-
-		for _, f := range files {
-			var b Block
-
-			ReadJSON(root+"/"+dir.Name()+"/"+f.Name(), &b)
-			headers = append(headers, b.Header)
+		if err != nil {
+			log.Println("Error reading directory ", err)
+		} else {
+			for _, fi := range files {
+				var b Block
+				fpath := strings.Join([]string{root, dir.Name(), fi.Name()}, "/")
+				ReadJSON(fpath, &b)
+				headers = append(headers, b.Header)
+			}
 		}
 	}
 	return headers
 }
 
+// BlockFromHeader retrieves a Block using metadata from the Blockheader h
 func BlockFromHeader(h BlockHeader) Block {
 
 	list, err := ioutil.ReadDir(root)
-	CheckError(err)
-	fname := h.Filename + "/" + strconv.Itoa(h.BlockNum)
+	var errBlock Block
+	if err != nil {
+		log.Println("Error reading directory ", err)
+		return errBlock
+	}
 
+	fname := h.Filename + "/" + strconv.Itoa(h.BlockNum)
 	for _, dir := range list {
 		var b Block
-
-		fmt.Println("Looking for directory ", h.Filename)
-		fmt.Println("Comparing to ", "/"+dir.Name())
 		if "/"+dir.Name() == h.Filename {
 			ReadJSON(root+fname, &b)
-			fmt.Println("Found Block!")
 			return b
 		}
 	}
 	fmt.Println("Block not found!")
-	var errBlock Block
 	return errBlock
 }
 
+// ReadJSON reads a JSON encoded interface to disc
 func ReadJSON(fname string, key interface{}) {
 	fi, err := os.Open(fname)
+	defer fi.Close()
+
 	if err != nil {
 		fmt.Println("Couldnt Read JSON ")
 		return
 	}
+
 	decoder := json.NewDecoder(fi)
 	err = decoder.Decode(key)
-	CheckError(err)
-	fi.Close()
+	if err != nil {
+		log.Println("Error encoding JSON ", err)
+		return
+	}
 }
 
-func SaveJSON(fileName string, key interface{}) {
+// WriteJSON writes a JSON encoded interface to disc
+func WriteJSON(fileName string, key interface{}) {
 	outFile, err := os.Create(fileName)
+	defer outFile.Close()
+	if err != nil {
+		log.Println("Error opening JSON ", err)
+		return
+	}
 	CheckError(err)
 	encoder := json.NewEncoder(outFile)
 	err = encoder.Encode(key)
-	CheckError(err)
-	outFile.Close()
+	if err != nil {
+		log.Println("Error encoding JSON ", err)
+		return
+	}
 }
 
-func LogJSON(key interface{}) {
-	outFile, err := os.Create("/home/sjarvie/log" + id + ".json")
-	CheckError(err)
-	encoder := json.NewEncoder(outFile)
-	err = encoder.Encode(key)
-	CheckError(err)
-	outFile.Close()
-}
-
+// Init initializes all internal structures to run a datanode
+// The id of the node is dn_id and fspath is the location to
+// use as the block storage system on disc
 func Init(dn_id, fspath string) {
 
 	id = dn_id
@@ -219,21 +232,22 @@ func Init(dn_id, fspath string) {
 
 	err := os.Chdir(root)
 	CheckError(err)
-
 	conn, err := net.Dial("tcp", SERVERADDR)
 	CheckError(err)
 
 	encoder := json.NewEncoder(conn)
+	decoder := json.NewDecoder(conn)
 
 	PacketChannel := make(chan Packet)
-	tick := time.Tick(2 * time.Second)
-	decoder := json.NewDecoder(conn)
 	go ReceivePacket(decoder, PacketChannel)
 
+	tick := time.Tick(2 * time.Second)
+
+	// start communication
 	for {
 		select {
 		case <-tick:
-			SendHeartBeat(encoder)
+			SendHeartbeat(encoder)
 		case r := <-PacketChannel:
 			HandleResponse(r, encoder)
 		}
