@@ -7,17 +7,20 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math"
 	"net"
 	"os"
 	"strings"
 	"sync"
+	"sort"
 )
 
 const SERVERADDR = "localhost:8080"
 const SIZEOFBLOCK = 1000
 
 var headerChannel chan BlockHeader
+var sendChannel chan Packet
+var sendMap map[string] *json.Encoder 		// maps DatanodeIDs to their connections
+var sendMapLock sync.Mutex
 var root *filenode
 var filemap map[string](map[int][]BlockHeader) //TODO combine with Nodes
 var datanodemap map[string]*datanode
@@ -30,6 +33,7 @@ const (
 	ACK      = iota
 	BLOCK    = iota
 	BLOCKACK = iota
+	GETBLOCK = iota
 )
 
 // A file is composed of one or more Blocks
@@ -69,19 +73,46 @@ type filenode struct {
 type datanode struct {
 	ID       string
 	mu       sync.Mutex
-	conn     *net.Conn
-	sender   chan Packet
-	receiver chan Packet
 	listed   bool
 	size     uint64
 }
 
+type By func(p1, p2 *datanode) bool
+func (by By) Sort(nodes []datanode) {
+	s := &datanodeSorter{
+		nodes: nodes,
+		by:      by, // The Sort method's receiver is the function (closure) that defines the sort order.
+	}
+	sort.Sort(s)
+}
+type datanodeSorter struct {
+	nodes []datanode
+	by      func(p1, p2 *datanode) bool // Closure used in the Less method.
+}
+func (s *datanodeSorter) Len() int {
+	return len(s.nodes)
+}
+func (s *datanodeSorter) Swap(i, j int) {
+	s.nodes[i], s.nodes[j] = s.nodes[j], s.nodes[i]
+}
+// Less is part of sort.Interface. It is implemented by calling the "by" closure in the sorter.
+func (s *datanodeSorter) Less(i, j int) bool {
+	return s.by(&s.nodes[i], &s.nodes[j])
+}
+
+
+
+
+
+
 func (dn *datanode) SendPacket(p Packet) {
 	//	dn.mu.Lock()
-	EncodePacket(*dn.conn, p)
-	LogJSON(p)
+	sendChannel <- p
 	//	dn.mu.Unlock()
 }
+
+
+
 
 func (dn *datanode) SetListed(listed bool) {
 	//	dn.mu.Lock()
@@ -122,6 +153,12 @@ func HandleBlockHeaders() {
 // TODO a more logical structure for local vs remote pathing
 func BlocksFromFile(localname, remotename string) []Block {
 
+	var bls []Block
+	if len(datanodemap) < 1 {
+		fmt.Println("No connected datanodes, cannot save file")
+		return bls
+	}
+
 	info, err := os.Lstat(localname)
 	if err != nil {
 		panic(err)
@@ -146,9 +183,26 @@ func BlocksFromFile(localname, remotename string) []Block {
 	// TODO make this in parallel
 	// TODO this will be Headers in the future
 	total := int((info.Size() / SIZEOFBLOCK) + 1)
-	bls := make([]Block, 0, total)
+	bls = make([]Block, 0, total)
 
 	num := 0
+
+	//Setup nodes for block load balancing
+
+	sizeArr := make([]datanode,len(datanodemap))
+	i := 0
+	for _, v := range datanodemap {
+		sizeArr[i] = *v
+		i ++
+	}
+	bysize := func(dn1, dn2 *datanode) bool {
+		return dn1.size < dn2.size
+	}
+	By(bysize).Sort(sizeArr)
+	nodeindex := 0
+
+
+
 	for {
 
 		// read a chunk from file uint64o Block data buffer
@@ -173,19 +227,13 @@ func BlocksFromFile(localname, remotename string) []Block {
 			remotename = "/" + remotename
 		}
 
-		//choose optimal datanode
-		min_size := uint64(math.MaxUint64)
-		var min_node *datanode
-		for _, v := range datanodemap {
-			if v.size < min_size {
-				min_size = v.size
-				min_node = v
-			}
-		}
+		h := BlockHeader{sizeArr[nodeindex].ID, remotename, uint64(n), num, total}
 
-		h := BlockHeader{min_node.ID, remotename, uint64(n), num, total}
+		// load balance via roundrobin
+		nodeindex = (nodeindex+1) % len(sizeArr)
+
+
 		data := make([]byte, 0, n)
-
 		data = w.Bytes()[0:n]
 		b := Block{h, data}
 		bls = append(bls, b)
@@ -270,7 +318,7 @@ func DistributeBlocks(bls []Block) {
 	fmt.Println("distributing ", len(bls), " bls")
 	for _, d := range bls {
 		//TODO sanity check
-		dn, ok := datanodemap[d.Header.DatanodeID]
+		_, ok := datanodemap[d.Header.DatanodeID]
 		if !ok {
 			log.Printf("Error distributing Block with DatanodeID %s\n", d.Header.DatanodeID)
 			continue
@@ -281,20 +329,22 @@ func DistributeBlocks(bls []Block) {
 		p.SRC = id
 		p.CMD = BLOCK
 		p.Data = Block{d.Header, d.Data}
-		LogJSON(*p)
 
-		dn.SendPacket(*p)
+		sendChannel <- *p
 	}
 }
 
-func EncodePacket(conn net.Conn, p Packet) {
-	encoder := json.NewEncoder(conn)
-	err := encoder.Encode(p)
-	if err != nil {
-		log.Println("error sending", p.DST)
+func SendPackets() {
+	for p := range sendChannel {
+		sendMapLock.Lock()
+		encoder := sendMap[p.DST]
+		err := encoder.Encode(p)
+		if err != nil {
+			log.Println("error sending", p.DST)
+		}
+		sendMapLock.Unlock()
 	}
 }
-
 func LogJSON(key interface{}) {
 	outFile, err := os.Create("/home/sjarvie/logNN.json")
 	CheckError(err)
@@ -304,24 +354,6 @@ func LogJSON(key interface{}) {
 	outFile.Close()
 }
 
-func (dn *datanode) DecodePackets(conn net.Conn) {
-
-	for {
-		var p Packet
-		decoder := json.NewDecoder(conn)
-		err := decoder.Decode(&p)
-		if err != nil {
-			log.Println("error receiving: err = ")
-			return
-		}
-
-		if p.SRC != "" {
-			dn.receiver <- p
-		}
-
-	}
-
-}
 
 func (dn *datanode) Handle(p Packet) {
 	listed := dn.GetListed()
@@ -363,27 +395,28 @@ func (dn *datanode) Handle(p Packet) {
 	}
 
 	// send response
+	sendChannel <- r
 
-	EncodePacket(*dn.conn, r)
 }
 
 func CheckConnection(conn net.Conn, p Packet) {
 	dn, ok := datanodemap[p.SRC]
 	if !ok {
 		fmt.Println("Adding new datanode :", p.SRC)
-		datanodemap[p.SRC] = &datanode{p.SRC, sync.Mutex{}, &conn, make(chan Packet), make(chan Packet), false, 0}
+		datanodemap[p.SRC] = &datanode{p.SRC, sync.Mutex{}, false, 0}
 	} else {
 		fmt.Printf("Datanode %s reconnected \n", dn.ID)
-		dn.conn = &conn
 	}
+	sendMapLock.Lock()
+	sendMap[p.SRC] = json.NewEncoder(conn)
+	sendMapLock.Unlock()
+	dn = datanodemap[p.SRC]
+	dn.Handle(p)
 }
 
-func (dn *datanode) HandleConnection() {
+func (dn *datanode) HandleConnection(conn net.Conn) {
 
-	go dn.DecodePackets(*dn.conn)
-	for r := range dn.receiver {
-		dn.Handle(r)
-	}
+	
 }
 
 func HandleConnection(conn net.Conn) {
@@ -398,9 +431,16 @@ func HandleConnection(conn net.Conn) {
 	CheckConnection(conn, p)
 
 	// start datanode
-
 	dn := datanodemap[p.SRC]
-	dn.HandleConnection()
+	for  {
+		var p Packet
+		err := decoder.Decode(&p)
+		if err != nil {
+			log.Println("error receiving: err = ")
+			return
+		}
+		dn.Handle(p)
+	}
 }
 
 // uint64eract with user
@@ -441,16 +481,24 @@ func main() {
 	filemap = make(map[string]map[int][]BlockHeader)
 	headerChannel = make(chan BlockHeader)
 
+	sendChannel = make(chan Packet)
+	sendMap = make(map[string]*json.Encoder)
+	sendMapLock = sync.Mutex{}
+
+
 	go HandleBlockHeaders()
+
 
 	// setup user uint64eraction
 	go ReceiveInput()
+	go SendPackets()
 
 	id = "NN"
 	listener, err := net.Listen("tcp", SERVERADDR)
 	CheckError(err)
 
 	datanodemap = make(map[string]*datanode)
+
 
 	// listen for datanode connections
 	for {

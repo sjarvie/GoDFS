@@ -22,6 +22,7 @@ const (
 	ACK   = iota
 	BLOCK = iota
 	BLOCKACK = iota
+	GETBLOCK = iota
 )
 
 // A file is composed of one or more Blocks
@@ -49,9 +50,8 @@ type Packet struct {
 }
 
 // receive a Packet and send to syncronized channel
-func ReceivePacket(conn net.Conn, p chan Packet) {
+func ReceivePacket(decoder *json.Decoder, p chan Packet) {
 	for {
-		decoder := json.NewDecoder(conn)
 		r := new(Packet)
 		decoder.Decode(r)
 		p <- *r
@@ -109,7 +109,9 @@ func WriteBlock(b Block)  {
 	fname := h.Filename +"/"+ strconv.Itoa(h.BlockNum)
 
 	for _, dir := range list {
-		if dir.Name() == h.Filename{
+		fmt.Println("Looking for directory ", h.Filename)
+		fmt.Println("Comparing to ", dir.Name())
+		if "/" + dir.Name() == h.Filename{
 			SaveJSON(root + fname, b)
 			return 
 		}
@@ -157,6 +159,19 @@ func GetBlockHeaders() []BlockHeader {
 	}
 	return headers
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 func ReadJSON(fname string, key interface{}) {
 	fi, err := os.Open(fname)
@@ -207,8 +222,8 @@ func main() {
 
 	PacketChannel := make(chan Packet)
 	tick := time.Tick(2 * time.Second)
-
-	go ReceivePacket(conn, PacketChannel)
+	decoder := json.NewDecoder(conn)
+	go ReceivePacket(decoder, PacketChannel)
 
 	for {
 		select {
