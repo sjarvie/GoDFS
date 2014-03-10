@@ -1,4 +1,4 @@
-package main
+package namenode
 
 import (
 	"bufio"
@@ -9,9 +9,9 @@ import (
 	"log"
 	"net"
 	"os"
+	"sort"
 	"strings"
 	"sync"
-	"sort"
 )
 
 const SERVERADDR = "localhost:8080"
@@ -19,9 +19,9 @@ const SIZEOFBLOCK = 1000
 
 var headerChannel chan BlockHeader
 var sendChannel chan Packet
-var sendMap map[string] *json.Encoder 		// maps DatanodeIDs to their connections
+var sendMap map[string]*json.Encoder // maps DatanodeIDs to their connections
 var sendMapLock sync.Mutex
-var blockReceiverChannel chan Block     // used to fetch blocks on user request
+var blockReceiverChannel chan Block // used to fetch blocks on user request
 var blockRequestorChannel chan BlockHeader
 
 var root *filenode
@@ -74,44 +74,44 @@ type filenode struct {
 // Hold file and connection information
 // Syncronized access to individual datanode contents
 type datanode struct {
-	ID       string
-	mu       sync.Mutex
-	listed   bool
-	size     uint64
+	ID     string
+	mu     sync.Mutex
+	listed bool
+	size   uint64
 }
 
 type By func(p1, p2 *datanode) bool
+
 func (by By) Sort(nodes []datanode) {
 	s := &datanodeSorter{
 		nodes: nodes,
-		by:      by, // The Sort method's receiver is the function (closure) that defines the sort order.
+		by:    by, // The Sort method's receiver is the function (closure) that defines the sort order.
 	}
 	sort.Sort(s)
 }
+
 type datanodeSorter struct {
 	nodes []datanode
-	by      func(p1, p2 *datanode) bool // Closure used in the Less method.
+	by    func(p1, p2 *datanode) bool // Closure used in the Less method.
 }
+
 func (s *datanodeSorter) Len() int {
 	return len(s.nodes)
 }
 func (s *datanodeSorter) Swap(i, j int) {
 	s.nodes[i], s.nodes[j] = s.nodes[j], s.nodes[i]
 }
+
 // Less is part of sort.Interface. It is implemented by calling the "by" closure in the sorter.
 func (s *datanodeSorter) Less(i, j int) bool {
 	return s.by(&s.nodes[i], &s.nodes[j])
 }
-
 
 func (dn *datanode) SendPacket(p Packet) {
 	//	dn.mu.Lock()
 	sendChannel <- p
 	//	dn.mu.Unlock()
 }
-
-
-
 
 func (dn *datanode) SetListed(listed bool) {
 	//	dn.mu.Lock()
@@ -188,19 +188,17 @@ func BlocksFromFile(localname, remotename string) []Block {
 
 	//Setup nodes for block load balancing
 
-	sizeArr := make([]datanode,len(datanodemap))
+	sizeArr := make([]datanode, len(datanodemap))
 	i := 0
 	for _, v := range datanodemap {
 		sizeArr[i] = *v
-		i ++
+		i++
 	}
 	bysize := func(dn1, dn2 *datanode) bool {
 		return dn1.size < dn2.size
 	}
 	By(bysize).Sort(sizeArr)
 	nodeindex := 0
-
-
 
 	for {
 
@@ -229,8 +227,7 @@ func BlocksFromFile(localname, remotename string) []Block {
 		h := BlockHeader{sizeArr[nodeindex].ID, remotename, uint64(n), num, total}
 
 		// load balance via roundrobin
-		nodeindex = (nodeindex+1) % len(sizeArr)
-
+		nodeindex = (nodeindex + 1) % len(sizeArr)
 
 		data := make([]byte, 0, n)
 		data = w.Bytes()[0:n]
@@ -256,7 +253,6 @@ func ContainsHeader(arr []BlockHeader, h BlockHeader) bool {
 }
 
 // Run function dynamically to construct filesystem
-//TODO duplicates
 func MergeNode(h BlockHeader) {
 
 	path := h.Filename
@@ -300,7 +296,7 @@ func MergeNode(h BlockHeader) {
 				if partial == path {
 					filemap[path] = make(map[int][]BlockHeader)
 					filemap[path][h.BlockNum] = make([]BlockHeader, 5, 5)
-					filemap[path][h.BlockNum][0] =  h
+					filemap[path][h.BlockNum][0] = h
 					datanodemap[h.DatanodeID].size += h.Size
 					fmt.Println("creating Block header # ", h.BlockNum, "to filemap at ", path)
 				}
@@ -353,7 +349,6 @@ func LogJSON(key interface{}) {
 	outFile.Close()
 }
 
-
 func (dn *datanode) Handle(p Packet) {
 	listed := dn.GetListed()
 
@@ -388,7 +383,7 @@ func (dn *datanode) Handle(p Packet) {
 			headerChannel <- p.Headers[0]
 		}
 		r.CMD = ACK
-	
+
 	case BLOCK:
 		blockReceiverChannel <- p.Data
 		r.CMD = ACK
@@ -414,7 +409,6 @@ func CheckConnection(conn net.Conn, p Packet) {
 	dn.Handle(p)
 }
 
-
 func HandleConnection(conn net.Conn) {
 
 	// receive first Packet and add datanode if necessary
@@ -428,7 +422,7 @@ func HandleConnection(conn net.Conn) {
 
 	// start datanode
 	dn := datanodemap[p.SRC]
-	for  {
+	for {
 		var p Packet
 		err := decoder.Decode(&p)
 		if err != nil {
@@ -439,14 +433,13 @@ func HandleConnection(conn net.Conn) {
 	}
 }
 
-
 func ConstructFile(localname, remotename string, headers []BlockHeader) {
 	outFile, err := os.Create(localname)
 	CheckError(err)
 	w := bufio.NewWriter(outFile)
-	
+
 	// send a request packet and wait for response block before fetching next block
-	for _, h:= range headers {
+	for _, h := range headers {
 
 		p := new(Packet)
 		p.SRC = id
@@ -455,19 +448,17 @@ func ConstructFile(localname, remotename string, headers []BlockHeader) {
 		p.Headers = []BlockHeader{h}
 		fmt.Println("Adding to sendchannel ", *p)
 		sendChannel <- *p
-		b := <- blockReceiverChannel
+		b := <-blockReceiverChannel
 		if b.Header == h {
 			if _, err := w.Write(b.Data[:b.Header.Size]); err != nil {
-			panic(err)
+				panic(err)
 			}
 		}
 		fmt.Println("Printed block ", b)
 
 	}
 	w.Flush()
- 	outFile.Close()
-
-
+	outFile.Close()
 
 }
 
@@ -482,15 +473,11 @@ func ReceiveInput() {
 		fmt.Scan(&cmd)
 		fmt.Scan(&file1)
 		fmt.Scan(&file2)
-		
+
 		if !(cmd == "put" || cmd == "get") {
 			fmt.Printf("Incorrect command\n Valid Commands: \n \t put [localinput] [remoteoutput] \n \t get [remoteinput] [localoutput] \n")
 			continue
 		}
-
-
-
-		
 
 		if cmd == "put" {
 			localname := file1
@@ -507,8 +494,8 @@ func ReceiveInput() {
 			localname := file2
 
 			fmt.Println("Retrieving file")
-			headernumbers,ok := filemap[remotename]
-			if !ok  || len(headernumbers) == 0 {
+			headernumbers, ok := filemap[remotename]
+			if !ok || len(headernumbers) == 0 {
 				fmt.Println("Remote file not found in system")
 				continue
 			}
@@ -520,9 +507,7 @@ func ReceiveInput() {
 				fmt.Println("Could not find all blocks")
 			}
 
-
 			fetchHeaders := make([]BlockHeader, num, num)
-
 
 			i := 0
 			for i < num {
@@ -530,62 +515,46 @@ func ReceiveInput() {
 				headers := filemap[remotename][i]
 				old_i := i
 
-				for _,h := range headers {
+				for _, h := range headers {
 					fmt.Println(h)
 					if h.BlockNum == i {
 
 						// TODO this can break if multiple calls are made
 						fetchHeaders[i] = h
 						fmt.Println("adding request for header ", h)
-						i ++
+						i++
 						break
 					}
 				}
-				if i == old_i { 
+				if i == old_i {
 					fmt.Println("Could not find blockNum ", i)
 					return
 				}
-				
+
 			}
 
 			fmt.Println("ConstructFile")
 
 			ConstructFile(localname, remotename, fetchHeaders)
 
-
-			
-			
-
-
-
-
-
 		}
 
 	}
 }
 
-
-
-
-
-
-func main() {
+func Init() {
 
 	// setup filesystem
 	root = &filenode{"/", nil, make([]*filenode, 0, 5)}
 	filemap = make(map[string]map[int][]BlockHeader)
 	headerChannel = make(chan BlockHeader)
-	blockReceiverChannel  = make(chan Block)     // used to fetch blocks on user request
-
+	blockReceiverChannel = make(chan Block) // used to fetch blocks on user request
 
 	sendChannel = make(chan Packet)
 	sendMap = make(map[string]*json.Encoder)
 	sendMapLock = sync.Mutex{}
 
-
 	go HandleBlockHeaders()
-
 
 	// setup user uint64eraction
 	go ReceiveInput()
@@ -596,7 +565,6 @@ func main() {
 	CheckError(err)
 
 	datanodemap = make(map[string]*datanode)
-
 
 	// listen for datanode connections
 	for {

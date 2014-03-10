@@ -1,4 +1,4 @@
-package main
+package datanode
 
 import (
 	"encoding/json"
@@ -6,8 +6,8 @@ import (
 	"io/ioutil"
 	"net"
 	"os"
-	"time"
 	"strconv"
+	"time"
 )
 
 const SERVERADDR = "localhost:8080"
@@ -17,10 +17,10 @@ var id, root string // CMD line arguments
 var state = HB
 
 const (
-	HB    = iota
-	LIST  = iota
-	ACK   = iota
-	BLOCK = iota
+	HB       = iota
+	LIST     = iota
+	ACK      = iota
+	BLOCK    = iota
 	BLOCKACK = iota
 	GETBLOCK = iota
 )
@@ -33,11 +33,11 @@ type Block struct {
 
 // Block Headers hold Block Data information
 type BlockHeader struct {
-	DatanodeID                   string
-	Filename                     string //the Filename including the path "/data/test.txt"
-	Size    			int64 //Size of Block in bytes
-	BlockNum  int // the 0 indexed position of Block within file
-	NumBlocks int  // total number of Blocks in file
+	DatanodeID string
+	Filename   string //the Filename including the path "/data/test.txt"
+	Size       int64  //Size of Block in bytes
+	BlockNum   int    // the 0 indexed position of Block within file
+	NumBlocks  int    // total number of Blocks in file
 }
 
 // Packets are sent over the network
@@ -87,14 +87,13 @@ func HandleResponse(p Packet, encoder *json.Encoder) {
 		r.CMD = LIST
 
 	case BLOCK:
-		fmt.Println("Received Block ",  p.Data)
+		fmt.Println("Received Block ", p.Data)
 		r.CMD = BLOCKACK
-
 
 		WriteBlock(p.Data)
 
 		p.CMD = BLOCKACK
-		r.Headers = make([]BlockHeader,0,2)
+		r.Headers = make([]BlockHeader, 0, 2)
 		r.Headers = append(r.Headers, p.Data.Header)
 		LogJSON(*r)
 
@@ -107,42 +106,39 @@ func HandleResponse(p Packet, encoder *json.Encoder) {
 	encoder.Encode(*r)
 }
 
-
-func WriteBlock(b Block)  {
+func WriteBlock(b Block) {
 	list, err := ioutil.ReadDir(root)
-	h := b.Header 
-	fname := h.Filename +"/"+ strconv.Itoa(h.BlockNum)
+	h := b.Header
+	fname := h.Filename + "/" + strconv.Itoa(h.BlockNum)
 
 	for _, dir := range list {
 		fmt.Println("Looking for directory ", h.Filename)
 		fmt.Println("Comparing to ", dir.Name())
-		if "/" + dir.Name() == h.Filename{
-			SaveJSON(root + fname, b)
-			return 
+		if "/"+dir.Name() == h.Filename {
+			SaveJSON(root+fname, b)
+			return
 		}
 	}
 	// create directory
-	err = os.Mkdir(root + h.Filename, 0700)
-	if (err != nil ){
+	err = os.Mkdir(root+h.Filename, 0700)
+	if err != nil {
 		fmt.Println("path error : ", err)
-		return 
+		return
 	}
 
-	fname = h.Filename +"/"+ strconv.Itoa(h.BlockNum)
-	SaveJSON(root + fname, b)
+	fname = h.Filename + "/" + strconv.Itoa(h.BlockNum)
+	SaveJSON(root+fname, b)
 	fmt.Println("wrote Block to disc")
 
-	return 
+	return
 
 }
-
-
 
 // List Block contents
 // Later add recursion and switch to Blocks
 func GetBlockHeaders() []BlockHeader {
 
-	list, err := ioutil.ReadDir(root) 
+	list, err := ioutil.ReadDir(root)
 
 	CheckError(err)
 	headers := make([]BlockHeader, 0, len(list))
@@ -155,50 +151,37 @@ func GetBlockHeaders() []BlockHeader {
 		files, err := ioutil.ReadDir(dir.Name())
 		CheckError(err)
 
-		for _,f := range files {
+		for _, f := range files {
 			var b Block
 
-			ReadJSON(root + "/"+ dir.Name() + "/" + f.Name(), &b)
+			ReadJSON(root+"/"+dir.Name()+"/"+f.Name(), &b)
 			headers = append(headers, b.Header)
 		}
 	}
 	return headers
 }
 
+func BlockFromHeader(h BlockHeader) Block {
 
-
-func BlockFromHeader(h BlockHeader) Block{
-	
-	list, err := ioutil.ReadDir(root) 
+	list, err := ioutil.ReadDir(root)
 	CheckError(err)
-	fname := h.Filename +"/"+ strconv.Itoa(h.BlockNum)
+	fname := h.Filename + "/" + strconv.Itoa(h.BlockNum)
 
 	for _, dir := range list {
 		var b Block
 
 		fmt.Println("Looking for directory ", h.Filename)
-		fmt.Println("Comparing to ", "/" + dir.Name())
-		if "/" + dir.Name() == h.Filename{
-			ReadJSON(root + fname, &b)
+		fmt.Println("Comparing to ", "/"+dir.Name())
+		if "/"+dir.Name() == h.Filename {
+			ReadJSON(root+fname, &b)
 			fmt.Println("Found Block!")
-			return b 
+			return b
 		}
 	}
 	fmt.Println("Block not found!")
 	var errBlock Block
 	return errBlock
 }
-
-
-
-
-
-
-
-
-
-
-
 
 func ReadJSON(fname string, key interface{}) {
 	fi, err := os.Open(fname)
@@ -222,7 +205,7 @@ func SaveJSON(fileName string, key interface{}) {
 }
 
 func LogJSON(key interface{}) {
-	outFile, err := os.Create("/home/sjarvie/log"+id+".json")
+	outFile, err := os.Create("/home/sjarvie/log" + id + ".json")
 	CheckError(err)
 	encoder := json.NewEncoder(outFile)
 	err = encoder.Encode(key)
@@ -230,15 +213,12 @@ func LogJSON(key interface{}) {
 	outFile.Close()
 }
 
+func Init(dn_id, fspath string) {
 
-func main() {
+	id = dn_id
+	root = fspath
 
-	if len(os.Args) != 3 {
-	    fmt.Println("Usage: datanode id path")
-	    os.Exit(1)
-	}
-	id = os.Args[1]
-	root = os.Args[2]
+	
 	err := os.Chdir(root)
 	CheckError(err)
 
