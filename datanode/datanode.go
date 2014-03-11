@@ -22,14 +22,14 @@ var state = HB  // internal statemachine
 
 // commands for node communication
 const (
-	HB       = iota // heartbeat
-	LIST     = iota // list directorys
-	ACK      = iota // acknowledgement
-	BLOCK    = iota // handle the incoming Block
-	BLOCKACK = iota // notifcation that Block was written to disc
+	HB            = iota // heartbeat
+	LIST          = iota // list directorys
+	ACK           = iota // acknowledgement
+	BLOCK         = iota // handle the incoming Block
+	BLOCKACK      = iota // notifcation that Block was written to disc
 	RETRIEVEBLOCK = iota // request to retrieve a Block
-	DISTRIBUTE = iota // request to distribute a Block to a datanode
-	GETHEADERS = iota
+	DISTRIBUTE    = iota // request to distribute a Block to a datanode
+	GETHEADERS    = iota
 )
 
 // A file is composed of one or more Blocks
@@ -42,7 +42,7 @@ type Block struct {
 type BlockHeader struct {
 	DatanodeID string // ID of datanode which holds the block
 	Filename   string //the remote name of the block including the path "/test/0"
-	Size       uint64  // size of Block in bytes
+	Size       uint64 // size of Block in bytes
 	BlockNum   int    // the 0 indexed position of Block within file
 	NumBlocks  int    // total number of Blocks in file
 }

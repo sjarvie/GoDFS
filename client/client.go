@@ -62,7 +62,6 @@ type Packet struct {
 	Headers []BlockHeader // optional Blockheader list
 }
 
-
 // SendPackets encodes packets and transmits them to their proper recipients
 func SendPackets(encoder *json.Encoder, ch chan Packet) {
 	for p := range ch {
@@ -309,7 +308,6 @@ func ReceiveInput() {
 				encoder.Encode(*p)
 				fmt.Println("Sending packet ", *p)
 
-
 				// receive block
 				var r Packet
 
@@ -347,7 +345,6 @@ func Init() {
 
 	encoder = json.NewEncoder(conn)
 	decoder = json.NewDecoder(conn)
-
 
 	SendHeartbeat()
 

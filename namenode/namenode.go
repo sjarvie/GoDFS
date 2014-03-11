@@ -19,9 +19,8 @@ var headerChannel chan BlockHeader   // processes headers into filesystem
 var sendChannel chan Packet          //  enqueued packets for transmission
 var sendMap map[string]*json.Encoder // maps DatanodeIDs to their connections
 var sendMapLock sync.Mutex
-var clientMap map [BlockHeader]string // maps requested Blocks to the client ID which requested them, based on Blockheader
+var clientMap map[BlockHeader]string // maps requested Blocks to the client ID which requested them, based on Blockheader
 var clientMapLock sync.Mutex
-
 
 var blockReceiverChannel chan Block        // used to fetch blocks on user request
 var blockRequestorChannel chan BlockHeader // used to send block requests
@@ -34,16 +33,15 @@ var id string
 
 // commands for node communication
 const (
-	HB       = iota // heartbeat
-	LIST     = iota // list directorys
-	ACK      = iota // acknowledgement
-	BLOCK    = iota // handle the incoming Block
-	BLOCKACK = iota // notifcation that Block was written to disc
+	HB            = iota // heartbeat
+	LIST          = iota // list directorys
+	ACK           = iota // acknowledgement
+	BLOCK         = iota // handle the incoming Block
+	BLOCKACK      = iota // notifcation that Block was written to disc
 	RETRIEVEBLOCK = iota // request to retrieve a Block
-	DISTRIBUTE = iota // request to distribute a Block to a datanode
-	GETHEADERS = iota
+	DISTRIBUTE    = iota // request to distribute a Block to a datanode
+	GETHEADERS    = iota
 )
-
 
 // A file is composed of one or more Blocks
 type Block struct {
@@ -55,7 +53,7 @@ type Block struct {
 type BlockHeader struct {
 	DatanodeID string // ID of datanode which holds the block
 	Filename   string //the remote name of the block including the path "/test/0"
-	Size       uint64  // size of Block in bytes
+	Size       uint64 // size of Block in bytes
 	BlockNum   int    // the 0 indexed position of Block within file
 	NumBlocks  int    // total number of Blocks in file
 }
@@ -75,8 +73,6 @@ type filenode struct {
 	parent   *filenode
 	children []*filenode
 }
-
-
 
 // Represent connected Datanodes
 // Hold file and connection information
@@ -127,10 +123,6 @@ func HandleBlockHeaders() {
 		MergeNode(h)
 	}
 }
-
-
-
-
 
 // ContainsHeader searches a BlockHeader for a given BlockHeader
 func ContainsHeader(arr []BlockHeader, h BlockHeader) bool {
@@ -196,11 +188,6 @@ func MergeNode(h BlockHeader) {
 	}
 }
 
-
-
-
-
-
 // DistributeBlocks creates packets based on BlockHeader metadata and enqueues them for transmission
 func DistributeBlocks(bls []Block) {
 	fmt.Println("distributing ", len(bls), " bls")
@@ -215,7 +202,7 @@ func DistributeBlock(b Block) {
 
 	if len(datanodemap) < 1 {
 		fmt.Println("No connected datanodes, cannot save file")
-		return 
+		return
 	}
 
 	//Setup nodes for block load balancing
@@ -270,7 +257,7 @@ func WriteJSON(fileName string, key interface{}) {
 
 func HandlePacket(p Packet) {
 
-	if (p.SRC == "" ){
+	if p.SRC == "" {
 		fmt.Println("Badpacket")
 		return
 	}
@@ -287,22 +274,22 @@ func HandlePacket(p Packet) {
 			return
 		case DISTRIBUTE:
 			fmt.Println("Distributing block")
-			
+
 			b := p.Data
 			DistributeBlock(b)
 			r.CMD = ACK
 		case RETRIEVEBLOCK:
 			r.CMD = RETRIEVEBLOCK
-			if p.Headers == nil  || len(p.Headers) != 1 {
+			if p.Headers == nil || len(p.Headers) != 1 {
 				fmt.Println("Bad RETRIEVEBLOCK request Packet , ", p)
 				return
 			}
 
-			r.DST =  p.Headers[0].DatanodeID // Block to retrieve is specified by given header
+			r.DST = p.Headers[0].DatanodeID // Block to retrieve is specified by given header
 
 			r.Headers = p.Headers
 			// specify client that is requesting a block when it arrives
-			clientMapLock.Lock()  
+			clientMapLock.Lock()
 			clientMap[p.Headers[0]] = r.SRC
 			clientMapLock.Unlock()
 			fmt.Println("sending client packet ", r)
@@ -310,20 +297,20 @@ func HandlePacket(p Packet) {
 		case GETHEADERS:
 			fmt.Println("getting headers")
 			r.CMD = GETHEADERS
-			if p.Headers == nil  || len(p.Headers) != 1 {
+			if p.Headers == nil || len(p.Headers) != 1 {
 				fmt.Println("Bad Header request Packet , ", p)
 				return
 			}
 			fname := p.Headers[0].Filename
-			blockMap,ok := filemap[fname]
+			blockMap, ok := filemap[fname]
 			if !ok {
 				fmt.Println("BadHeader request Packet", p)
 			}
 			numBlocks := blockMap[0][0].NumBlocks
 
 			headers := make([]BlockHeader, numBlocks, numBlocks)
-			for i,_ := range headers {
-				headers[i] = blockMap[i][0]  // grab the first available BlockHeader for each block number
+			for i, _ := range headers {
+				headers[i] = blockMap[i][0] // grab the first available BlockHeader for each block number
 			}
 			r.DST = p.SRC // return to client
 			r.Headers = headers
@@ -378,9 +365,6 @@ func HandlePacket(p Packet) {
 			r.CMD = BLOCK
 			r.Data = p.Data
 
-			
-
-	
 		}
 	}
 
@@ -399,7 +383,7 @@ func CheckConnection(conn net.Conn, p Packet) {
 		sendMapLock.Lock()
 		sendMap[p.SRC] = json.NewEncoder(conn)
 		sendMapLock.Unlock()
-	}else {
+	} else {
 		dn, ok := datanodemap[p.SRC]
 		if !ok {
 			fmt.Println("Adding new datanode :", p.SRC)
@@ -427,7 +411,6 @@ func HandleConnection(conn net.Conn) {
 	}
 	CheckConnection(conn, p)
 
-
 	// receive packets and handle
 	for {
 		var p Packet
@@ -439,8 +422,6 @@ func HandleConnection(conn net.Conn) {
 		HandlePacket(p)
 	}
 }
-
-
 
 // Init initializes all internal structures to run a namnode and handles incoming connections
 func Init() {
@@ -462,7 +443,7 @@ func Init() {
 	//go handleReceivedBlocks()
 
 	// setup user interaction
-//	go ReceiveInput()
+	//	go ReceiveInput()
 
 	id = "NN"
 	listener, err := net.Listen("tcp", SERVERADDR)
