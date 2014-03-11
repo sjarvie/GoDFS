@@ -213,7 +213,6 @@ func WriteJSON(fileName string, key interface{}) {
 		log.Println("Error opening JSON ", err)
 		return
 	}
-	CheckError(err)
 	encoder := json.NewEncoder(outFile)
 	err = encoder.Encode(key)
 	if err != nil {
