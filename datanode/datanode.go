@@ -1,5 +1,4 @@
 // Package datanode contains the functionality to run a datanode in GoDFS
-// usage :  godfs datanode [ID] [Block Filesystem Path]
 package datanode
 
 import (
@@ -26,9 +25,11 @@ const (
 	HB       = iota // heartbeat
 	LIST     = iota // list directorys
 	ACK      = iota // acknowledgement
-	BLOCK    = iota // handle the including Block
+	BLOCK    = iota // handle the incoming Block
 	BLOCKACK = iota // notifcation that Block was written to disc
-	GETBLOCK = iota // request to retrieve a Block
+	RETRIEVEBLOCK = iota // request to retrieve a Block
+	DISTRIBUTE = iota // request to distribute a Block to a datanode
+	GETHEADERS = iota
 )
 
 // A file is composed of one or more Blocks
@@ -41,7 +42,7 @@ type Block struct {
 type BlockHeader struct {
 	DatanodeID string // ID of datanode which holds the block
 	Filename   string //the remote name of the block including the path "/test/0"
-	Size       int64  // size of Block in bytes
+	Size       uint64  // size of Block in bytes
 	BlockNum   int    // the 0 indexed position of Block within file
 	NumBlocks  int    // total number of Blocks in file
 }
@@ -57,7 +58,7 @@ type Packet struct {
 
 // ReceivePacket decodes a packet and adds it to the handler channel
 // for processing by the datanode
-func ReceivePacket(decoder *json.Decoder, p chan Packet) {
+func ReceivePackets(decoder *json.Decoder, p chan Packet) {
 	for {
 		r := new(Packet)
 		decoder.Decode(r)
@@ -84,7 +85,7 @@ func HandleResponse(p Packet, encoder *json.Encoder) {
 
 	switch p.CMD {
 	case ACK:
-		r.CMD = HB
+		return
 	case LIST:
 		list := GetBlockHeaders()
 		r.Headers = make([]BlockHeader, len(list))
@@ -99,10 +100,12 @@ func HandleResponse(p Packet, encoder *json.Encoder) {
 		r.Headers = make([]BlockHeader, 0, 2)
 		r.Headers = append(r.Headers, p.Data.Header)
 
-	case GETBLOCK:
+	case RETRIEVEBLOCK:
+		fmt.Println("retrieving block from ", p.Headers[0])
 		b := BlockFromHeader(p.Headers[0])
 		r.CMD = BLOCK
 		r.Data = b
+		fmt.Println("sending retrieved block packet ", *r)
 	}
 	encoder.Encode(*r)
 }
@@ -168,6 +171,8 @@ func GetBlockHeaders() []BlockHeader {
 // BlockFromHeader retrieves a Block using metadata from the Blockheader h
 func BlockFromHeader(h BlockHeader) Block {
 
+	fmt.Println("looking for block")
+
 	list, err := ioutil.ReadDir(root)
 	var errBlock Block
 	if err != nil {
@@ -180,6 +185,7 @@ func BlockFromHeader(h BlockHeader) Block {
 		var b Block
 		if "/"+dir.Name() == h.Filename {
 			ReadJSON(root+fname, &b)
+			fmt.Println("Found block ", b)
 			return b
 		}
 	}
@@ -238,7 +244,7 @@ func Init(dn_id, fspath string) {
 	decoder := json.NewDecoder(conn)
 
 	PacketChannel := make(chan Packet)
-	go ReceivePacket(decoder, PacketChannel)
+	go ReceivePackets(decoder, PacketChannel)
 
 	tick := time.Tick(2 * time.Second)
 
