@@ -1,0 +1,6 @@
+<ConfigOptionList>
+	<ConfigOption key="namenodeid">NN</ConfigOption>
+	<ConfigOption key="listenhost">localhost</ConfigOption>
+	<ConfigOption key="listenport">8080</ConfigOption>
+	<ConfigOption key="sizeofblock">1000</ConfigOption>
+</ConfigOptionList>
