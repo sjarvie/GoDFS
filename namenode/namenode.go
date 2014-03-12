@@ -3,6 +3,7 @@ package namenode
 
 import (
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"log"
@@ -10,13 +11,17 @@ import (
 	"net"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
-const SERVERADDR = "localhost:8080"
-const SIZEOFBLOCK = 1000
+// Config Options
+var host string     // listen host
+var port string     // listen port
+var SIZEOFBLOCK int //size of block in bytes
+var id string       // the namenode id
 
 var headerChannel chan BlockHeader   // processes headers into filesystem
 var sendChannel chan Packet          //  enqueued packets for transmission
@@ -32,8 +37,6 @@ var root *filenode                             // the filesystem
 var filemap map[string](map[int][]BlockHeader) // filenames to blocknumbers to headers
 var datanodemap map[string]*datanode           // filenames to datanodes
 
-var id string
-
 // commands for node communication
 const (
 	HB            = iota // heartbeat
@@ -46,6 +49,17 @@ const (
 	GETHEADERS    = iota // request to retrieve the headers of a given filename
 	ERROR         = iota // notification of a failed request
 )
+
+// The XML parsing structures for configuration options
+type ConfigOptionList struct {
+	XMLName       xml.Name       `xml:"ConfigOptionList"`
+	ConfigOptions []ConfigOption `xml:"ConfigOption"`
+}
+
+type ConfigOption struct {
+	Key   string `xml:"key,attr"`
+	Value string `xml:",chardata"`
+}
 
 // A file is composed of one or more Blocks
 type Block struct {
@@ -498,8 +512,51 @@ func HandleConnection(conn net.Conn) {
 	}
 }
 
+// Parse Config sets up the node with the provided XML file
+func ParseConfigXML(configpath string) error {
+	xmlFile, err := os.Open(configpath)
+	if err != nil {
+		return err
+	}
+	defer xmlFile.Close()
+
+	var list ConfigOptionList
+	err = xml.NewDecoder(xmlFile).Decode(&list)
+	if err != nil {
+		return err
+	}
+
+	for _, o := range list.ConfigOptions {
+		switch o.Key {
+		case "namenodeid":
+			id = o.Value
+		case "listenhost":
+			host = o.Value
+		case "listenport":
+			port = o.Value
+		case "sizeofblock":
+			n, err := strconv.Atoi(o.Value)
+			if err != nil {
+				return err
+			}
+			SIZEOFBLOCK = n
+		default:
+			return errors.New("Bad ConfigOption received Key : " + o.Key + " Value : " + o.Value)
+		}
+	}
+
+	return nil
+}
+
 // Init initializes all internal structures to run a namnode and handles incoming connections
-func Init() {
+func Init(configpath string) {
+
+	// Read config
+	err := ParseConfigXML(configpath)
+
+	if err != nil {
+		log.Fatal("Fatal error ", err.Error())
+	}
 
 	// setup filesystem
 	root = &filenode{"/", nil, make([]*filenode, 0, 5)}
@@ -513,21 +570,20 @@ func Init() {
 	clientMap = make(map[BlockHeader]string)
 	clientMapLock = sync.Mutex{}
 
-	id = "NN"
 	datanodemap = make(map[string]*datanode)
 }
 
 // Run starts the namenode
-func Run() {
+func Run(configpath string) {
 
 	// setup filesystem
-	Init()
+	Init(configpath)
 
 	// Start communication
 	go HandleBlockHeaders()
 	go SendPackets()
 
-	listener, err := net.Listen("tcp", SERVERADDR)
+	listener, err := net.Listen("tcp", host+":"+port)
 	if err != nil {
 		log.Fatal("Fatal error ", err.Error())
 	}

@@ -4,9 +4,9 @@ import (
 	"testing"
 )
 
-func TestInvalidInput(t *testing.T) {
+func TestInvalidBlockInput(t *testing.T) {
 
-	Init()
+	Init("examplenamenode.xml")
 
 	dn1 := datanode{"DN1", true, 0}
 	datanodemap["DN1"] = &dn1
@@ -21,9 +21,9 @@ func TestInvalidInput(t *testing.T) {
 	}
 }
 
-func TestValidInput(t *testing.T) {
+func TestValidBlockInput(t *testing.T) {
 
-	Init()
+	Init("examplenamenode.xml")
 
 	dn1 := datanode{"DN1", true, 0}
 	datanodemap["DN1"] = &dn1
