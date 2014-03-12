@@ -100,4 +100,14 @@ func TestDuplicateInsert(t *testing.T) {
 		t.Errorf("%s", err)
 	}
 
+	blks, ok := filemap["/out.txt"]
+	if !ok {
+		t.Errorf("merge failed ")
+	}
+	harr1, ok := blks[0]
+
+	if len(harr1) != 1 {
+		t.Errorf("merge failed: Expected 1 , Got " + strconv.Itoa(len(harr1)))
+	}
+
 }

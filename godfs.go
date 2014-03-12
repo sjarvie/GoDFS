@@ -22,7 +22,7 @@ func main() {
 	cmd := os.Args[1]
 
 	if cmd == "namenode" {
-		namenode.Init()
+		namenode.Run()
 	} else if cmd == "datanode" {
 		id := os.Args[2]
 		fspath := os.Args[3]

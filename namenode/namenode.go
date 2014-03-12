@@ -44,7 +44,7 @@ const (
 	RETRIEVEBLOCK = iota // request to retrieve a Block
 	DISTRIBUTE    = iota // request to distribute a Block to a datanode
 	GETHEADERS    = iota // request to retrieve the headers of a given filename
-	ERROR 		  = iota 	// notification of a failed request
+	ERROR         = iota // notification of a failed request
 )
 
 // A file is composed of one or more Blocks
@@ -67,7 +67,7 @@ type Packet struct {
 	SRC     string        // source ID
 	DST     string        // destination ID
 	CMD     int           // command for the handler
-	Err     string 		  // optional error explanation
+	Err     string        // optional error explanation
 	Data    Block         // optional Block
 	Headers []BlockHeader // optional BlockHeader list
 }
@@ -227,50 +227,46 @@ func MergeNode(h BlockHeader) error {
 	return nil
 }
 
-// DistributeBlocks creates packets based on BlockHeader metadata and enqueues them for transmission
-func DistributeBlocks(bls []Block) {
+// AssignBlocks creates packets based on BlockHeader metadata and enqueues them for transmission
+func AssignBlocks(bls []Block) {
 	for _, b := range bls {
-		DistributeBlock(b)
+		AssignBlock(b)
 	}
 }
 
-// DistributeBlocks chooses a datanode which balances the load across nodes for a block and enqueues
+// AssignBlocks chooses a datanode which balances the load across nodes for a block and enqueues
 // the block for distribution
-func DistributeBlock(b Block) {
-	defer func() {
-		if r := recover(); r != nil {
-			fmt.Println("Recovered from panic ", r)
-			fmt.Println("Unable to distribute block ", b)
-			return
-		}
-	}()
+func AssignBlock(b Block) (Packet, error) {
+	p := new(Packet)
 
-	if len(datanodemap) < 1 {
-		fmt.Println("No connected datanodes, cannot save file")
-		return
+	if &b == nil || &b.Header == nil || &b.Data == nil || b.Header.Filename == "" ||
+		b.Header.Size <= 0 || b.Header.BlockNum < 0 || b.Header.NumBlocks <= b.Header.BlockNum {
+		return *p, errors.New("Invalid Block input")
 	}
 
-	//Random load balancing
+	if len(datanodemap) < 1 {
+		return *p, errors.New("Cannot distribute Block, no datanodes are connected")
+	}
 
+	// Create Packet and send block
+	p.SRC = id
+	p.CMD = BLOCK
+
+	//Random load balancing
 	nodeIDs := make([]string, len(datanodemap), len(datanodemap))
 	i := 0
 	for _, v := range datanodemap {
 		nodeIDs[i] = v.ID
 		i++
 	}
-
 	rand.Seed(time.Now().UTC().UnixNano())
-
-	p := new(Packet)
-
 	nodeindex := rand.Intn(len(nodeIDs))
 	p.DST = nodeIDs[nodeindex]
 	b.Header.DatanodeID = p.DST
 
-	p.SRC = id
-	p.CMD = BLOCK
 	p.Data = Block{b.Header, b.Data}
-	sendChannel <- *p
+
+	return *p, nil
 
 }
 
@@ -336,7 +332,13 @@ func HandlePacket(p Packet) {
 		case DISTRIBUTE:
 			b := p.Data
 			fmt.Println("Distributing Block", b)
-			DistributeBlock(b)
+			p, err := AssignBlock(b)
+			if err != nil {
+				r.CMD = ERROR
+				r.Err = err.Error()
+			}
+			sendChannel <- p
+
 			r.CMD = ACK
 		case RETRIEVEBLOCK:
 			r.CMD = RETRIEVEBLOCK
@@ -370,13 +372,14 @@ func HandlePacket(p Packet) {
 			fname := p.Headers[0].Filename
 			blockMap, ok := filemap[fname]
 			if !ok {
+				fmt.Println(filemap)
 				r.CMD = ERROR
 				r.Err = "File not found " + fname
-				fmt.Println("Requested file in filesystem, ", fname)
+				fmt.Println("Requested file in filesystem not found, ", fname)
 				break
 			}
 
-			_,ok = blockMap[0]
+			_, ok = blockMap[0]
 			if !ok {
 				r.CMD = ERROR
 				r.Err = "Could not locate first block in file"
@@ -499,28 +502,35 @@ func HandleConnection(conn net.Conn) {
 func Init() {
 
 	// setup filesystem
-	fmt.Println("Initializing Namenode")
 	root = &filenode{"/", nil, make([]*filenode, 0, 5)}
 	filemap = make(map[string]map[int][]BlockHeader)
 
 	// setup communication
 	headerChannel = make(chan BlockHeader)
-	//blockReceiverChannel = make(chan Block)
 	sendChannel = make(chan Packet)
 	sendMap = make(map[string]*json.Encoder)
 	sendMapLock = sync.Mutex{}
 	clientMap = make(map[BlockHeader]string)
 	clientMapLock = sync.Mutex{}
+
+	id = "NN"
+	datanodemap = make(map[string]*datanode)
+}
+
+// Run starts the namenode
+func Run() {
+
+	// setup filesystem
+	Init()
+
+	// Start communication
 	go HandleBlockHeaders()
 	go SendPackets()
 
-	id = "NN"
 	listener, err := net.Listen("tcp", SERVERADDR)
 	if err != nil {
 		log.Fatal("Fatal error ", err.Error())
 	}
-
-	datanodemap = make(map[string]*datanode)
 
 	// listen for datanode connections
 	for {
