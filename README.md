@@ -14,26 +14,29 @@ Run the following in serparate processes
 
 * Start the namenode
 
-	sjarvie/GoDFS$ godfs namenode
+		sjarvie/GoDFS$ godfs namenode
 	
 * Start a datanode
+godfs datanode [id] [local absolute path to store blocks]
 
-	sjarvie/GoDFS$ godfs datanode DN1 /Data1
-	
-* Start the namenode
+		sjarvie/GoDFS$ godfs datanode DN1 /Data1
 
-	sjarvie/GoDFS$ godfs namenode DN2 /Data2
-	
 * Start the client
 
-	sjarvie/GoDFS$ godfs client
+		sjarvie/GoDFS$ godfs client
 	
 	
 In the client proccess, the following commands can be issued to save or retrieve files
 
-	put [local file absolute path] [desired remote path]
+* Insert a file
+
+  put [local file absolute path] [desired remote path]
   
-  	get [remote path to retrieve file from] [local absolute path to save file]
+* Retrieve a file
+
+get [remote path to retrieve file from] [local absolute path to save file]
+
+	
 
   	put /home/sjarvie/file.txt /file.txt
   
