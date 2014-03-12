@@ -3,13 +3,16 @@ package namenode
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"math/rand"
 	"net"
 	"os"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 const SERVERADDR = "localhost:8080"
@@ -40,7 +43,7 @@ const (
 	BLOCKACK      = iota // notifcation that Block was written to disc
 	RETRIEVEBLOCK = iota // request to retrieve a Block
 	DISTRIBUTE    = iota // request to distribute a Block to a datanode
-	GETHEADERS    = iota
+	GETHEADERS    = iota // request to retrieve the headers of a given filename
 )
 
 // A file is composed of one or more Blocks
@@ -134,16 +137,30 @@ func ContainsHeader(arr []BlockHeader, h BlockHeader) bool {
 	return false
 }
 
-// Mergenode adds a BlockHeader entry to the filesystem, in its correct location
-func MergeNode(h BlockHeader) {
+type errorString struct {
+	s string
+}
 
-	defer func() {
-		if r := recover(); r != nil {
-			fmt.Println("Recovered from panic ", r)
-			fmt.Println("Unable to merge node ", h)
-			return
-		}
-	}()
+func (e *errorString) Error() string {
+	return e.s
+}
+
+// New returns an error that formats as the given text.
+func New(text string) error {
+	return &errorString{text}
+}
+
+// Mergenode adds a BlockHeader entry to the filesystem, in its correct location
+func MergeNode(h BlockHeader) error {
+
+	if &h == nil || h.DatanodeID == "" || h.Filename == "" || h.Size < 0 || h.BlockNum < 0 || h.NumBlocks < h.BlockNum {
+		return errors.New("Invalid header input")
+	}
+
+	dn, ok := datanodemap[h.DatanodeID]
+	if !ok {
+		return errors.New("BlockHeader DatanodeID: " + h.DatanodeID + " does not exist in map")
+	}
 
 	path := h.Filename
 	path_arr := strings.Split(path, "/")
@@ -160,7 +177,6 @@ func MergeNode(h BlockHeader) {
 			for _, v := range q.children {
 				if v.path == partial {
 					q = v
-					partial = partial + "/"
 					exists = true
 					break
 				}
@@ -168,16 +184,21 @@ func MergeNode(h BlockHeader) {
 			if exists {
 				// If file already been added, we add the BlockHeader to the map
 				if partial == path {
-					arr, ok := filemap[path][h.BlockNum]
+					blks, ok := filemap[path]
 					if !ok {
-						fmt.Println("Trying to add node to filemap location that doesnt exist " + path)
-						return
+						return errors.New("Attempted to add to filenode that does not exist!")
 					}
-					fmt.Println("Adding Blockheader ", h)
-					if !ContainsHeader(arr, h) {
-						filemap[path][h.BlockNum] = append(filemap[path][h.BlockNum], h)
-						datanodemap[h.DatanodeID].size += h.Size
+					_, ok = blks[h.BlockNum]
+					if !ok {
+						filemap[partial][h.BlockNum] = make([]BlockHeader, 1, 1)
+						filemap[partial][h.BlockNum][0] = h
+
+					} else {
+						if !ContainsHeader(filemap[path][h.BlockNum], h) {
+							filemap[path][h.BlockNum] = append(filemap[path][h.BlockNum], h)
+						}
 					}
+					dn.size += h.Size
 					//fmt.Println("adding Block header # ", h.BlockNum, "to filemap at ", path)
 				}
 
@@ -186,17 +207,13 @@ func MergeNode(h BlockHeader) {
 			} else {
 
 				//  if we are at file, create the map entry
-				fmt.Println("Creating node at ", partial)
 				n := &filenode{partial, q, make([]*filenode, 1)}
 				if partial == path {
 					filemap[partial] = make(map[int][]BlockHeader)
 					filemap[partial][h.BlockNum] = make([]BlockHeader, 1, 1)
 					filemap[partial][h.BlockNum][0] = h
-					//datanodemap[h.DatanodeID].size += h.Size
+					dn.size += h.Size
 					//fmt.fmt("creating Block header # ", h.BlockNum, "to filemap at ", path)
-				} else {
-					//create a directory node
-
 				}
 
 				n.parent = q
@@ -205,6 +222,7 @@ func MergeNode(h BlockHeader) {
 			}
 		}
 	}
+	return nil
 }
 
 // DistributeBlocks creates packets based on BlockHeader metadata and enqueues them for transmission
@@ -230,23 +248,22 @@ func DistributeBlock(b Block) {
 		return
 	}
 
-	//Setup nodes for block load balancing
-	sizeArr := make([]datanode, len(datanodemap))
+	//Random load balancing
+
+	nodeIDs := make([]string, len(datanodemap), len(datanodemap))
 	i := 0
 	for _, v := range datanodemap {
-		sizeArr[i] = *v
+		nodeIDs[i] = v.ID
 		i++
 	}
-	bysize := func(dn1, dn2 *datanode) bool {
-		return dn1.size < dn2.size
-	}
-	By(bysize).Sort(sizeArr)
+
+	rand.Seed(time.Now().UTC().UnixNano())
 
 	p := new(Packet)
 
-	p.DST = sizeArr[0].ID
+	nodeindex := rand.Intn(len(nodeIDs))
+	p.DST = nodeIDs[nodeindex]
 	b.Header.DatanodeID = p.DST
-	(datanodemap[p.DST]).size += b.Header.Size
 
 	p.SRC = id
 	p.CMD = BLOCK
@@ -348,13 +365,18 @@ func HandlePacket(p Packet) {
 			if !ok {
 				fmt.Println("BadHeader request Packet", p)
 			}
-			numBlocks := blockMap[0][0].NumBlocks
 
+			fmt.Println(blockMap)
+			numBlocks := blockMap[0][0].NumBlocks
+			fmt.Println(blockMap[0])
+			fmt.Println(numBlocks)
 			headers := make([]BlockHeader, numBlocks, numBlocks)
 			for i, _ := range headers {
+				fmt.Println(blockMap[i])
 				headers[i] = blockMap[i][0] // grab the first available BlockHeader for each block number
 			}
 			r.Headers = headers
+			fmt.Println("Retrieved headers ", headers)
 
 		}
 
@@ -375,7 +397,6 @@ func HandlePacket(p Packet) {
 			fmt.Printf("Listing directory contents from %s \n", p.SRC)
 			list := p.Headers
 			for _, h := range list {
-				fmt.Println(h)
 				headerChannel <- h
 			}
 			dn.listed = true
