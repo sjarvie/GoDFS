@@ -29,9 +29,9 @@ const (
 	BLOCKACK      = iota // notifcation that Block was written to disc
 	RETRIEVEBLOCK = iota // request to retrieve a Block
 	DISTRIBUTE    = iota // request to distribute a Block to a datanode
-	GETHEADERS    = iota
+	GETHEADERS    = iota // request to retrieve the headers of a given filename
+	ERROR 		  = iota 	// notification of a failed request
 )
-
 // A file is composed of one or more Blocks
 type Block struct {
 	Header BlockHeader // metadata

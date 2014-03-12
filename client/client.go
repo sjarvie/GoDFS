@@ -37,7 +37,8 @@ const (
 	BLOCKACK      = iota // notifcation that Block was written to disc
 	RETRIEVEBLOCK = iota // request to retrieve a Block
 	DISTRIBUTE    = iota // request to distribute a Block to a datanode
-	GETHEADERS    = iota
+	GETHEADERS    = iota // request to retrieve the headers of a given filename
+	ERROR 		  = iota 	// notification of a failed request
 )
 
 // A file is composed of one or more Blocks
@@ -60,8 +61,9 @@ type Packet struct {
 	SRC     string        // source ID
 	DST     string        // destination ID
 	CMD     int           // command for the handler
+	Err     string 		  // optional error explanation
 	Data    Block         // optional Block
-	Headers []BlockHeader // optional Blockheader list
+	Headers []BlockHeader // optional BlockHeader list
 }
 
 // SendPackets encodes packets and transmits them to their proper recipients
@@ -270,8 +272,14 @@ func RetrieveFile(localname, remotename string) {
 	// get header list
 	var r Packet
 	decoder.Decode(&r)
+
+	if r.CMD == ERROR {
+		fmt.Println(r.Err)
+		return
+	}
+
 	if r.CMD != GETHEADERS || r.Headers == nil {
-		fmt.Println("Bad response packet for GETHEADERS ", r)
+		fmt.Println("Bad response packet ", r)
 		return
 	}
 

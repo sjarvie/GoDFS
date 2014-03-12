@@ -44,6 +44,7 @@ const (
 	RETRIEVEBLOCK = iota // request to retrieve a Block
 	DISTRIBUTE    = iota // request to distribute a Block to a datanode
 	GETHEADERS    = iota // request to retrieve the headers of a given filename
+	ERROR 		  = iota 	// notification of a failed request
 )
 
 // A file is composed of one or more Blocks
@@ -66,6 +67,7 @@ type Packet struct {
 	SRC     string        // source ID
 	DST     string        // destination ID
 	CMD     int           // command for the handler
+	Err     string 		  // optional error explanation
 	Data    Block         // optional Block
 	Headers []BlockHeader // optional BlockHeader list
 }
@@ -323,7 +325,7 @@ func HandlePacket(p Packet) {
 		return
 	}
 
-	r := Packet{id, p.SRC, ACK, *new(Block), make([]BlockHeader, 0)}
+	r := Packet{id, p.SRC, ACK, "", *new(Block), make([]BlockHeader, 0)}
 
 	if p.SRC == "C" {
 
@@ -339,8 +341,10 @@ func HandlePacket(p Packet) {
 		case RETRIEVEBLOCK:
 			r.CMD = RETRIEVEBLOCK
 			if p.Headers == nil || len(p.Headers) != 1 {
-				fmt.Println("Bad RETRIEVEBLOCK request Packet , ", p)
-				return
+				r.CMD = ERROR
+				r.Err = "Invalid Header received"
+				fmt.Println("Invalid RETRIEVEBLOCK Packet , ", p)
+				break
 			}
 
 			r.DST = p.Headers[0].DatanodeID // Block to retrieve is specified by given header
@@ -355,29 +359,37 @@ func HandlePacket(p Packet) {
 		case GETHEADERS:
 			r.CMD = GETHEADERS
 			if p.Headers == nil || len(p.Headers) != 1 {
-				fmt.Println("Bad Header request Packet , ", p)
-				return
+				r.CMD = ERROR
+				r.Err = "Invalid Header received"
+				fmt.Println("Received invalid Header Packet, ", p)
+				break
 			}
+
 			fmt.Println("Retrieving headers for client using ", p.Headers[0])
 
 			fname := p.Headers[0].Filename
 			blockMap, ok := filemap[fname]
 			if !ok {
-				fmt.Println("BadHeader request Packet", p)
+				r.CMD = ERROR
+				r.Err = "File not found " + fname
+				fmt.Println("Requested file in filesystem, ", fname)
+				break
 			}
 
-			fmt.Println(blockMap)
+			_,ok = blockMap[0]
+			if !ok {
+				r.CMD = ERROR
+				r.Err = "Could not locate first block in file"
+				break
+			}
 			numBlocks := blockMap[0][0].NumBlocks
-			fmt.Println(blockMap[0])
-			fmt.Println(numBlocks)
 			headers := make([]BlockHeader, numBlocks, numBlocks)
 			for i, _ := range headers {
 				fmt.Println(blockMap[i])
 				headers[i] = blockMap[i][0] // grab the first available BlockHeader for each block number
 			}
 			r.Headers = headers
-			fmt.Println("Retrieved headers ", headers)
-
+			fmt.Println("Retrieved headers ")
 		}
 
 	} else {
