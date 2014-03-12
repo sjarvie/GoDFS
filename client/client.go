@@ -1,4 +1,4 @@
-// Package datanode contains the functionality to run the client in GoDFS
+// Package client contains the functionality to run the client in GoDFS
 package client
 
 import (
