@@ -31,11 +31,11 @@ Run the following in serparate processes
 	
 In the client proccess, the following commands can be issued to save or retrieve files
 
-  put [local file absolute path] [desired remote path]
+	put [local file absolute path] [desired remote path]
   
-  get [remote path to retrieve file from] [local absolute path to save file]
+  	get [remote path to retrieve file from] [local absolute path to save file]
 
-  put /home/sjarvie/file.txt /file.txt
+  	put /home/sjarvie/file.txt /file.txt
   
-  get /file.txt /home/sjarvie/out.txt
+  	get /file.txt /home/sjarvie/out.txt
   
