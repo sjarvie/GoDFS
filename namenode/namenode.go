@@ -137,12 +137,20 @@ func ContainsHeader(arr []BlockHeader, h BlockHeader) bool {
 // Mergenode adds a BlockHeader entry to the filesystem, in its correct location
 func MergeNode(h BlockHeader) {
 
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("Recovered from panic ", r)
+			fmt.Println("Unable to merge node ", h)
+			return
+		}
+	}()
+
 	path := h.Filename
 	path_arr := strings.Split(path, "/")
 	q := root
 
 	for i, _ := range path_arr {
-		//skip root level
+		//skip
 		if i == 0 {
 			continue
 		} else {
@@ -152,6 +160,7 @@ func MergeNode(h BlockHeader) {
 			for _, v := range q.children {
 				if v.path == partial {
 					q = v
+					partial = partial + "/"
 					exists = true
 					break
 				}
@@ -159,25 +168,35 @@ func MergeNode(h BlockHeader) {
 			if exists {
 				// If file already been added, we add the BlockHeader to the map
 				if partial == path {
-					arr := filemap[path][h.BlockNum]
+					arr, ok := filemap[path][h.BlockNum]
+					if !ok {
+						fmt.Println("Trying to add node to filemap location that doesnt exist " + path)
+						return
+					}
+					fmt.Println("Adding Blockheader ", h)
 					if !ContainsHeader(arr, h) {
 						filemap[path][h.BlockNum] = append(filemap[path][h.BlockNum], h)
 						datanodemap[h.DatanodeID].size += h.Size
 					}
 					//fmt.Println("adding Block header # ", h.BlockNum, "to filemap at ", path)
 				}
+
 				//else it is a directory
 				continue
 			} else {
 
 				//  if we are at file, create the map entry
-				n := &filenode{partial, q, make([]*filenode, 5, 5)}
+				fmt.Println("Creating node at ", partial)
+				n := &filenode{partial, q, make([]*filenode, 1)}
 				if partial == path {
-					filemap[path] = make(map[int][]BlockHeader)
-					filemap[path][h.BlockNum] = make([]BlockHeader, 5, 5)
-					filemap[path][h.BlockNum][0] = h
-					datanodemap[h.DatanodeID].size += h.Size
-					//fmt.Log("creating Block header # ", h.BlockNum, "to filemap at ", path)
+					filemap[partial] = make(map[int][]BlockHeader)
+					filemap[partial][h.BlockNum] = make([]BlockHeader, 1, 1)
+					filemap[partial][h.BlockNum][0] = h
+					//datanodemap[h.DatanodeID].size += h.Size
+					//fmt.fmt("creating Block header # ", h.BlockNum, "to filemap at ", path)
+				} else {
+					//create a directory node
+
 				}
 
 				n.parent = q
@@ -190,7 +209,6 @@ func MergeNode(h BlockHeader) {
 
 // DistributeBlocks creates packets based on BlockHeader metadata and enqueues them for transmission
 func DistributeBlocks(bls []Block) {
-	fmt.Println("distributing ", len(bls), " bls")
 	for _, b := range bls {
 		DistributeBlock(b)
 	}
@@ -199,6 +217,13 @@ func DistributeBlocks(bls []Block) {
 // DistributeBlocks chooses a datanode which balances the load across nodes for a block and enqueues
 // the block for distribution
 func DistributeBlock(b Block) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("Recovered from panic ", r)
+			fmt.Println("Unable to distribute block ", b)
+			return
+		}
+	}()
 
 	if len(datanodemap) < 1 {
 		fmt.Println("No connected datanodes, cannot save file")
@@ -216,22 +241,33 @@ func DistributeBlock(b Block) {
 		return dn1.size < dn2.size
 	}
 	By(bysize).Sort(sizeArr)
+
 	p := new(Packet)
+
 	p.DST = sizeArr[0].ID
+	b.Header.DatanodeID = p.DST
+	(datanodemap[p.DST]).size += b.Header.Size
+
 	p.SRC = id
 	p.CMD = BLOCK
 	p.Data = Block{b.Header, b.Data}
 	sendChannel <- *p
+
 }
 
 // SendPackets encodes packets and transmits them to their proper recipients
 func SendPackets() {
 	for p := range sendChannel {
+
 		sendMapLock.Lock()
-		encoder := sendMap[p.DST]
+		encoder, ok := sendMap[p.DST]
+		if !ok {
+			fmt.Println("Could not find encoder for ", p.DST)
+			continue
+		}
 		err := encoder.Encode(p)
 		if err != nil {
-			log.Println("error sending", p.DST)
+			fmt.Println("Error sending", p.DST)
 		}
 		sendMapLock.Unlock()
 	}
@@ -240,15 +276,15 @@ func SendPackets() {
 // WriteJSON writes a JSON encoded interface to disc
 func WriteJSON(fileName string, key interface{}) {
 	outFile, err := os.Create(fileName)
-	defer outFile.Close()
 	if err != nil {
-		log.Println("Error opening JSON ", err)
+		fmt.Println("Error opening JSON ", err)
 		return
 	}
+	defer outFile.Close()
 	encoder := json.NewEncoder(outFile)
 	err = encoder.Encode(key)
 	if err != nil {
-		log.Println("Error encoding JSON ", err)
+		fmt.Println("Error encoding JSON ", err)
 		return
 	}
 }
@@ -256,6 +292,14 @@ func WriteJSON(fileName string, key interface{}) {
 // Handle handles a packet and performs the proper action based on its contents
 
 func HandlePacket(p Packet) {
+
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("Recovered from panic ", r)
+			fmt.Println("Unable to handle packet ", p)
+			return
+		}
+	}()
 
 	if p.SRC == "" {
 		fmt.Println("Badpacket")
@@ -265,17 +309,14 @@ func HandlePacket(p Packet) {
 	r := Packet{id, p.SRC, ACK, *new(Block), make([]BlockHeader, 0)}
 
 	if p.SRC == "C" {
-		fmt.Println("received client packet ", p)
 
 		switch p.CMD {
 		case HB:
-			// TODO handle client heartbeat
-			fmt.Println("Received client connection")
+			fmt.Println("Received client connection", p.SRC)
 			return
 		case DISTRIBUTE:
-			fmt.Println("Distributing block")
-
 			b := p.Data
+			fmt.Println("Distributing Block", b)
 			DistributeBlock(b)
 			r.CMD = ACK
 		case RETRIEVEBLOCK:
@@ -286,21 +327,22 @@ func HandlePacket(p Packet) {
 			}
 
 			r.DST = p.Headers[0].DatanodeID // Block to retrieve is specified by given header
+			fmt.Println("Retrieving Block for client ", p.SRC, "from node ", r.DST)
 
 			r.Headers = p.Headers
 			// specify client that is requesting a block when it arrives
 			clientMapLock.Lock()
-			clientMap[p.Headers[0]] = r.SRC
+			clientMap[p.Headers[0]] = p.SRC
 			clientMapLock.Unlock()
-			fmt.Println("sending client packet ", r)
 
 		case GETHEADERS:
-			fmt.Println("getting headers")
 			r.CMD = GETHEADERS
 			if p.Headers == nil || len(p.Headers) != 1 {
 				fmt.Println("Bad Header request Packet , ", p)
 				return
 			}
+			fmt.Println("Retrieving headers for client using ", p.Headers[0])
+
 			fname := p.Headers[0].Filename
 			blockMap, ok := filemap[fname]
 			if !ok {
@@ -312,9 +354,7 @@ func HandlePacket(p Packet) {
 			for i, _ := range headers {
 				headers[i] = blockMap[i][0] // grab the first available BlockHeader for each block number
 			}
-			r.DST = p.SRC // return to client
 			r.Headers = headers
-			fmt.Println("created header packet ", r)
 
 		}
 
@@ -343,24 +383,23 @@ func HandlePacket(p Packet) {
 
 		case BLOCKACK:
 			// receive acknowledgement for single Block header as being stored
-			fmt.Println("Received BLOCKACK")
 			if p.Headers != nil && len(p.Headers) == 1 {
 				headerChannel <- p.Headers[0]
 			}
 			r.CMD = ACK
+			fmt.Println("Received BLOCKACK ", p.Headers[0])
 
 		case BLOCK:
-			fmt.Println("Received Block Packet", p)
-			b := p.CMD
+			fmt.Println("Received Block Packet with header", p.Data.Header)
 
-			fmt.Println("handleReceivedBlock ", b)
+			// TODO map multiple clients
 			//clientMapLock.Lock()
 			//cID,ok := clientMap[p.Data.Header]
 			//clientMapLock.Unlock()
 			//if !ok {
 			//	fmt.Println("Header not found in clientMap  ", p.Data.Header)
+			//  return
 			//}
-
 			r.DST = "C"
 			r.CMD = BLOCK
 			r.Data = p.Data
@@ -369,6 +408,7 @@ func HandlePacket(p Packet) {
 	}
 
 	// send response
+	fmt.Println("sending packet ", r)
 	sendChannel <- r
 
 }
@@ -376,10 +416,9 @@ func HandlePacket(p Packet) {
 // Checkconnection adds or updates a connection to the namenode and handles its first packet
 func CheckConnection(conn net.Conn, p Packet) {
 
-	fmt.Println("Adding connection using packet", p)
-
 	// C is the client(hardcode for now)
 	if p.SRC == "C" {
+		fmt.Println("Adding new client conncetion")
 		sendMapLock.Lock()
 		sendMap[p.SRC] = json.NewEncoder(conn)
 		sendMapLock.Unlock()
@@ -399,7 +438,7 @@ func CheckConnection(conn net.Conn, p Packet) {
 	HandlePacket(p)
 }
 
-// Handle Connetion initializes the connection and performs packet retrieval
+// Handle Connection initializes the connection and performs packet retrieval
 func HandleConnection(conn net.Conn) {
 
 	// receive first Packet and add datanode if necessary
@@ -407,7 +446,7 @@ func HandleConnection(conn net.Conn) {
 	decoder := json.NewDecoder(conn)
 	err := decoder.Decode(&p)
 	if err != nil {
-		log.Println("error receiving")
+		fmt.Println("error receiving")
 	}
 	CheckConnection(conn, p)
 
@@ -416,7 +455,7 @@ func HandleConnection(conn net.Conn) {
 		var p Packet
 		err := decoder.Decode(&p)
 		if err != nil {
-			log.Println("error receiving: err = ")
+			fmt.Println("error receiving: err = ")
 			return
 		}
 		HandlePacket(p)
@@ -427,6 +466,7 @@ func HandleConnection(conn net.Conn) {
 func Init() {
 
 	// setup filesystem
+	fmt.Println("Initializing Namenode")
 	root = &filenode{"/", nil, make([]*filenode, 0, 5)}
 	filemap = make(map[string]map[int][]BlockHeader)
 
@@ -440,10 +480,6 @@ func Init() {
 	clientMapLock = sync.Mutex{}
 	go HandleBlockHeaders()
 	go SendPackets()
-	//go handleReceivedBlocks()
-
-	// setup user interaction
-	//	go ReceiveInput()
 
 	id = "NN"
 	listener, err := net.Listen("tcp", SERVERADDR)
@@ -457,7 +493,8 @@ func Init() {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			log.Fatal("Fatal error ", err.Error())
+			fmt.Println("Connection error ", err.Error())
+			continue
 		}
 		go HandleConnection(conn)
 	}

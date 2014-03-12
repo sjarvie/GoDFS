@@ -1,9 +1,11 @@
+// Package datanode contains the functionality to run the client in GoDFS
 package client
 
 import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -80,14 +82,11 @@ func SendHeartbeat() {
 	p.DST = "NN"
 	p.CMD = HB
 
-	fmt.Println("Sending packet ", *p)
 	encoder.Encode(*p)
-
 }
 
 // BlocksHeadersFromFile generates Blockheaders without datanodeID assignments
 // The client uses these headers to write blocks to datanodes
-//
 func BlockHeadersFromFile(localname, remotename string) []BlockHeader {
 
 	var headers []BlockHeader
@@ -216,7 +215,20 @@ func BlocksFromFile(localname, remotename string) []Block {
 	return bls
 }
 
-func DistributeBlocks(blocks []Block) {
+type errorString struct {
+	s string
+}
+
+func (e *errorString) Error() string {
+	return e.s
+}
+
+// New returns an error that formats as the given text.
+func New(text string) error {
+	return &errorString{text}
+}
+
+func DistributeBlocks(blocks []Block) error {
 
 	for _, b := range blocks {
 		p := new(Packet)
@@ -224,8 +236,87 @@ func DistributeBlocks(blocks []Block) {
 		p.DST = "NN"
 		p.CMD = DISTRIBUTE
 		p.Data = b
+		encoder.Encode(*p)
 
+		var r Packet
+		decoder.Decode(&r)
+		if r.CMD != ACK {
+			return errors.New("Could not distribute block to namenode")
+		}
 	}
+	return nil
+}
+
+// RetrieveFile queries the filesystem for the File located at remotename,
+// and saves its contents to the file localname
+func RetrieveFile(localname, remotename string) {
+	// TODO make this handle errors gracefully
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("Recovered from panic ", r)
+			fmt.Println("Unable to retrieve file")
+			return
+		}
+	}()
+	// send header request
+	p := new(Packet)
+	p.DST = "NN"
+	p.SRC = id
+	p.CMD = GETHEADERS
+	p.Headers = make([]BlockHeader, 1, 1)
+	p.Headers[0] = BlockHeader{"", remotename, uint64(0), 0, 0}
+	encoder.Encode(*p)
+
+	// get header list
+	var r Packet
+	decoder.Decode(&r)
+	if r.CMD != GETHEADERS || r.Headers == nil {
+		fmt.Println("Bad response packet for GETHEADERS ", r)
+		return
+	}
+
+	// setup writer
+	outFile, err := os.Create(localname)
+	if err != nil {
+		fmt.Println("error constructing file: ", err)
+		return
+	}
+	defer outFile.Close()
+	w := bufio.NewWriter(outFile)
+
+	// for each header, retrieve its block and write to disc
+	headers := r.Headers
+
+	fmt.Println("Received File Headers for ", p.Headers[0].Filename, ". Retrieving Blocks ")
+	for _, h := range headers {
+
+		// send request
+		p := new(Packet)
+		p.DST = "NN"
+		p.SRC = id
+		p.CMD = RETRIEVEBLOCK
+		p.Headers = make([]BlockHeader, 1, 1)
+		p.Headers[0] = h
+		encoder.Encode(*p)
+
+		// receive block
+		var r Packet
+		decoder.Decode(&r)
+
+		if r.CMD != BLOCK {
+			fmt.Println("Received bad packet ", p)
+			return
+		}
+
+		b := r.Data
+		n := b.Header.Size
+		_, err := w.Write(b.Data[:n])
+		if err != nil {
+			panic(err)
+		}
+	}
+	w.Flush()
+	fmt.Println("Wrote file to disc at ", localname)
 }
 
 // ReceiveInput provides user interaction and file placement/retrieval from remote filesystem
@@ -246,90 +337,34 @@ func ReceiveInput() {
 		}
 
 		if cmd == "put" {
+
 			localname := file1
 			remotename := file2
 			_, err := os.Lstat(localname)
 			if err != nil {
-				fmt.Println("Invalid File")
+				fmt.Println("File ", localname, " could not be accessed")
 				continue
 			}
 
 			// generate blocks from new File for distribution
 			blocks := BlocksFromFile(localname, remotename)
+
+			fmt.Println("Distributing ", len(blocks), "file blocks")
+
 			// send blocks to namenode for distribution
-			DistributeBlocks(blocks)
-			fmt.Println("Send blocks for distribution")
+
+			err = DistributeBlocks(blocks)
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
 
 		} else {
 			remotename := file1
 			localname := file2
-
 			fmt.Println("Retrieving file")
+			RetrieveFile(localname, remotename)
 
-			// TODO make this handle errors gracefully
-
-			// send header request
-			p := new(Packet)
-			p.DST = "NN"
-			p.SRC = id
-			p.CMD = GETHEADERS
-			p.Headers = make([]BlockHeader, 1, 1)
-			p.Headers[0] = BlockHeader{"", remotename, uint64(0), 0, 0}
-			fmt.Println("Sending packet ", *p)
-			encoder.Encode(*p)
-
-			// get header list
-			var r Packet
-			decoder.Decode(&r)
-			if r.CMD != GETHEADERS || r.Headers == nil {
-				fmt.Println("Bad response packet for GETHEADERS ", r)
-				continue
-			}
-
-			// setup writer
-			outFile, err := os.Create(localname)
-			if err != nil {
-				log.Println("error constructing file: err = ")
-				return
-			}
-			w := bufio.NewWriter(outFile)
-
-			// for each header, retrieve its block and write to disc
-			headers := r.Headers
-			for _, h := range headers {
-
-				// send request
-				p := new(Packet)
-				p.DST = "NN"
-				p.SRC = id
-				p.CMD = RETRIEVEBLOCK
-				p.Headers = make([]BlockHeader, 1, 1)
-				p.Headers[0] = h
-				encoder.Encode(*p)
-				fmt.Println("Sending packet ", *p)
-
-				// receive block
-				var r Packet
-
-				decoder.Decode(&r)
-				fmt.Println("Sending packet ", *p)
-
-				if r.CMD != BLOCK {
-					fmt.Println("Received bad packet ", p)
-					return
-				}
-
-				b := r.Data
-				n := b.Header.Size
-				_, err := w.Write(b.Data[:n])
-				if err != nil {
-					panic(err)
-				}
-
-			}
-
-			w.Flush()
-			outFile.Close()
 		}
 	}
 
@@ -340,14 +375,13 @@ func Init() {
 
 	id = "C"
 	conn, err := net.Dial("tcp", SERVERADDR)
-
 	CheckError(err)
 
 	encoder = json.NewEncoder(conn)
 	decoder = json.NewDecoder(conn)
 
-	SendHeartbeat()
-
+	// Start communication
+	//	SendHeartbeat()
 	ReceiveInput()
 
 	os.Exit(0)

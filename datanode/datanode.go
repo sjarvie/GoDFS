@@ -105,7 +105,6 @@ func HandleResponse(p Packet, encoder *json.Encoder) {
 		b := BlockFromHeader(p.Headers[0])
 		r.CMD = BLOCK
 		r.Data = b
-		fmt.Println("sending retrieved block packet ", *r)
 	}
 	encoder.Encode(*r)
 }
@@ -113,6 +112,14 @@ func HandleResponse(p Packet, encoder *json.Encoder) {
 // WriteBlock performs all functionality necessary to write a Block b
 // to the local filesystem
 func WriteBlock(b Block) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("Recovered from panic ", r)
+			fmt.Println("Unable to write Block")
+			return
+		}
+	}()
+
 	list, err := ioutil.ReadDir(root)
 	h := b.Header
 	fname := h.Filename + "/" + strconv.Itoa(h.BlockNum)
@@ -170,8 +177,6 @@ func GetBlockHeaders() []BlockHeader {
 
 // BlockFromHeader retrieves a Block using metadata from the Blockheader h
 func BlockFromHeader(h BlockHeader) Block {
-
-	fmt.Println("looking for block")
 
 	list, err := ioutil.ReadDir(root)
 	var errBlock Block
