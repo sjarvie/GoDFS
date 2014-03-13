@@ -166,6 +166,27 @@ func New(text string) error {
 	return &errorString{text}
 }
 
+// listFiles is a recursive helper for ListFiles
+func listFiles(node *filenode, input string) string {
+
+	input += node.path + "\n"
+	if node.children != nil {
+		for _, c := range node.children {
+			if c != nil {
+				input += "  " + listFiles(c, "")
+			}
+		}
+
+	}
+
+	return input
+}
+
+func ListFiles() string {
+	return listFiles(root, "")
+
+}
+
 // Mergenode adds a BlockHeader entry to the filesystem, in its correct location
 func MergeNode(h BlockHeader) error {
 
@@ -344,6 +365,12 @@ func HandlePacket(p Packet) {
 		case HB:
 			fmt.Println("Received client connection", p.SRC)
 			return
+		case LIST:
+			fmt.Println("Received List Request")
+			r.Message = ListFiles()
+			r.CMD = LIST
+			fmt.Println(r)
+
 		case DISTRIBUTE:
 			b := p.Data
 			fmt.Println("Distributing Block ", b.Header.Filename, "/", b.Header.BlockNum, " to ", b.Header.DatanodeID)
@@ -572,7 +599,7 @@ func Init(configpath string) {
 	}
 
 	// setup filesystem
-	root = &filenode{"/", nil, make([]*filenode, 0, 5)}
+	root = &filenode{"/", nil, make([]*filenode, 0, 1)}
 	filemap = make(map[string]map[int][]BlockHeader)
 
 	// setup communication

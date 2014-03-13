@@ -374,23 +374,23 @@ func RetrieveFile(localname, remotename string) {
 
 // ReceiveInput provides user interaction and file placement/retrieval from remote filesystem
 func ReceiveInput() {
+	fmt.Printf("Valid Commands: \n \t put [localinput] [remoteoutput] \n \t get [remoteinput] [localoutput] \n \t list\n ")
 	for {
-		fmt.Println("Enter command to send")
-
+		fmt.Printf(">>> ")
 		var cmd string
 		var file1 string
 		var file2 string
 		fmt.Scan(&cmd)
-		fmt.Scan(&file1)
-		fmt.Scan(&file2)
 
-		if !(cmd == "put" || cmd == "get") {
-			fmt.Printf("Incorrect command\n Valid Commands: \n \t put [localinput] [remoteoutput] \n \t get [remoteinput] [localoutput] \n")
+		if !(cmd == "put" || cmd == "get" || cmd == "list") {
+			fmt.Printf("Incorrect command\n Valid Commands: \n \t put [localinput] [remoteoutput] \n \t get [remoteinput] [localoutput] \n \t list")
 			continue
 		}
 
-		if cmd == "put" {
-
+		switch cmd {
+		case "put":
+			fmt.Scan(&file1)
+			fmt.Scan(&file2)
 			localname := file1
 			remotename := file2
 			_, err := os.Lstat(localname)
@@ -406,17 +406,54 @@ func ReceiveInput() {
 				fmt.Println(err)
 				continue
 			}
-
-			// send blocks to namenode for distribution
-
-		} else {
+		case "get":
+			fmt.Scan(&file1)
+			fmt.Scan(&file2)
 			remotename := file1
 			localname := file2
 			fmt.Println("Retrieving file")
 			RetrieveFile(localname, remotename)
 
+		case "list":
+			fmt.Println("Retrieving List")
+			RetrieveList()
 		}
 	}
+
+}
+
+// RetrieveList gets a file listing from the namenode
+func RetrieveList() {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("Recovered from panic ", r)
+			fmt.Println("Unable to retrieve file")
+			return
+		}
+	}()
+
+	// send header request
+	p := new(Packet)
+	p.DST = "NN"
+	p.SRC = id
+	p.CMD = LIST
+	encoder.Encode(*p)
+
+	// get header list
+	var r Packet
+	decoder.Decode(&r)
+
+	if r.CMD == ERROR {
+		fmt.Println(r.Message)
+		return
+	}
+
+	if r.CMD != LIST {
+		fmt.Println("Bad response packet ", r)
+		return
+	}
+
+	fmt.Println(r.Message)
 
 }
 
