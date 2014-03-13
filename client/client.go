@@ -16,7 +16,7 @@ import (
 )
 
 const SERVERADDR = "localhost:8080"
-const SIZEOFBLOCK = 1000
+const SIZEOFBLOCK = 4096
 
 var id string                        // client id
 var state = HB                       // internal statemachine
@@ -51,7 +51,7 @@ type Block struct {
 type BlockHeader struct {
 	DatanodeID string // ID of datanode which holds the block
 	Filename   string //the remote name of the block including the path "/test/0"
-	Size       uint64 // size of Block in bytes
+	Size       int64  // size of Block in bytes
 	BlockNum   int    // the 0 indexed position of Block within file
 	NumBlocks  int    // total number of Blocks in file
 }
@@ -64,6 +64,20 @@ type Packet struct {
 	Err     string        // optional error explanation
 	Data    Block         // optional Block
 	Headers []BlockHeader // optional BlockHeader list
+}
+
+// Error formatting stucture
+type errorString struct {
+	s string
+}
+
+func (e *errorString) Error() string {
+	return e.s
+}
+
+// New returns an error that formats as the given text.
+func New(text string) error {
+	return &errorString{text}
 }
 
 // SendPackets encodes packets and transmits them to their proper recipients
@@ -119,9 +133,9 @@ func BlockHeadersFromFile(localname, remotename string) []BlockHeader {
 			remotename = "/" + remotename
 		}
 
-		n := uint64(SIZEOFBLOCK)
+		n := int64(SIZEOFBLOCK)
 		if blocknum == (numblocks - 1) {
-			n = uint64(info.Size()) % SIZEOFBLOCK
+			n = int64(info.Size()) % SIZEOFBLOCK
 
 		}
 
@@ -153,49 +167,41 @@ func WriteJSON(fileName string, key interface{}) {
 
 // BlocksFromFile split a File into Blocks for storage on the filesystem
 // in the future this will read a fixed number of blocks at a time from disc for reasonable memory utilization
-func BlocksFromFile(localname, remotename string) []Block {
-
-	var bls []Block
+func DistributeBlocksFromFile(localname, remotename string) error {
 
 	info, err := os.Lstat(localname)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	// get read buffer
 	fi, err := os.Open(localname)
 	if err != nil {
-		panic(err)
+		return err
 	}
-	defer func() {
-		if err := fi.Close(); err != nil {
-			panic(err)
-		}
-	}()
 	r := bufio.NewReader(fi)
 
 	// Create Blocks
 	total := int((info.Size() / SIZEOFBLOCK) + 1)
-	bls = make([]Block, 0, total)
 
 	num := 0
 
-	for {
+	for num < total {
 
-		// read a chunk from file uint64o Block data buffer
+		// read a chunk from file into Block data buffer
 		buf := make([]byte, SIZEOFBLOCK)
 		w := bytes.NewBuffer(nil)
 
 		n, err := r.Read(buf)
 		if err != nil && err != io.EOF {
-			panic(err)
+			return err
 		}
 		if n == 0 {
 			break
 		}
 
 		if _, err := w.Write(buf[:n]); err != nil {
-			panic(err)
+			return err
 		}
 
 		// write full Block to disc
@@ -203,47 +209,53 @@ func BlocksFromFile(localname, remotename string) []Block {
 			remotename = "/" + remotename
 		}
 
-		h := BlockHeader{"", remotename, uint64(n), num, total}
+		h := BlockHeader{"", remotename, int64(n), num, total}
 
 		data := make([]byte, 0, n)
 		data = w.Bytes()[0:n]
 		b := Block{h, data}
-		bls = append(bls, b)
+
+		err = DistributeBlock(b)
+		if err != nil {
+			return err
+		}
 
 		// generate new Block
 		num += 1
 
 	}
-	return bls
+	if err := fi.Close(); err != nil {
+		return err
+	}
+
+	return nil
 }
 
-type errorString struct {
-	s string
-}
+func DistributeBlock(b Block) error {
 
-func (e *errorString) Error() string {
-	return e.s
-}
+	p := new(Packet)
+	p.SRC = id
+	p.DST = "NN"
+	p.CMD = DISTRIBUTE
+	p.Data = b
+	encoder.Encode(*p)
 
-// New returns an error that formats as the given text.
-func New(text string) error {
-	return &errorString{text}
+	var r Packet
+	decoder.Decode(&r)
+	if r.CMD != ACK {
+		return errors.New("Could not distribute block to namenode")
+	}
+	return nil
 }
 
 func DistributeBlocks(blocks []Block) error {
 
 	for _, b := range blocks {
-		p := new(Packet)
-		p.SRC = id
-		p.DST = "NN"
-		p.CMD = DISTRIBUTE
-		p.Data = b
-		encoder.Encode(*p)
 
-		var r Packet
-		decoder.Decode(&r)
-		if r.CMD != ACK {
-			return errors.New("Could not distribute block to namenode")
+		err := DistributeBlock(b)
+
+		if err != nil {
+			return errors.New("Could not distribute blocks to namenode")
 		}
 	}
 	return nil
@@ -266,7 +278,7 @@ func RetrieveFile(localname, remotename string) {
 	p.SRC = id
 	p.CMD = GETHEADERS
 	p.Headers = make([]BlockHeader, 1, 1)
-	p.Headers[0] = BlockHeader{"", remotename, uint64(0), 0, 0}
+	p.Headers[0] = BlockHeader{"", remotename, int64(0), 0, 0}
 	encoder.Encode(*p)
 
 	// get header list
@@ -290,12 +302,13 @@ func RetrieveFile(localname, remotename string) {
 		return
 	}
 	defer outFile.Close()
-	w := bufio.NewWriter(outFile)
+	w := bufio.NewWriterSize(outFile, SIZEOFBLOCK)
 
 	// for each header, retrieve its block and write to disc
 	headers := r.Headers
 
-	fmt.Println("Received File Headers for ", p.Headers[0].Filename, ". Retrieving Blocks ")
+	fmt.Println("Received File Headers for ", p.Headers[0].Filename, ". Retrieving ", r.Headers[0].NumBlocks, " Blocks ")
+
 	for _, h := range headers {
 
 		// send request
@@ -305,6 +318,7 @@ func RetrieveFile(localname, remotename string) {
 		p.CMD = RETRIEVEBLOCK
 		p.Headers = make([]BlockHeader, 1, 1)
 		p.Headers[0] = h
+
 		encoder.Encode(*p)
 
 		// receive block
@@ -315,15 +329,18 @@ func RetrieveFile(localname, remotename string) {
 			fmt.Println("Received bad packet ", p)
 			return
 		}
-
 		b := r.Data
 		n := b.Header.Size
+
 		_, err := w.Write(b.Data[:n])
 		if err != nil {
 			panic(err)
 		}
+		fmt.Printf(".")
+		w.Flush()
 	}
-	w.Flush()
+
+	fmt.Printf(" Done! \n")
 	fmt.Println("Wrote file to disc at ", localname)
 }
 
@@ -355,17 +372,15 @@ func ReceiveInput() {
 			}
 
 			// generate blocks from new File for distribution
-			blocks := BlocksFromFile(localname, remotename)
+			fmt.Println("Distributing file blocks")
+			err = DistributeBlocksFromFile(localname, remotename)
 
-			fmt.Println("Distributing ", len(blocks), "file blocks")
-
-			// send blocks to namenode for distribution
-
-			err = DistributeBlocks(blocks)
 			if err != nil {
 				fmt.Println(err)
 				continue
 			}
+
+			// send blocks to namenode for distribution
 
 		} else {
 			remotename := file1

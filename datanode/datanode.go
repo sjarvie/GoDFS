@@ -43,7 +43,7 @@ type Block struct {
 type BlockHeader struct {
 	DatanodeID string // ID of datanode which holds the block
 	Filename   string //the remote name of the block including the path "/test/0"
-	Size       uint64 // size of Block in bytes
+	Size       int64  // size of Block in bytes
 	BlockNum   int    // the 0 indexed position of Block within file
 	NumBlocks  int    // total number of Blocks in file
 }
@@ -126,10 +126,10 @@ func WriteBlock(b Block) {
 	fname := h.Filename + "/" + strconv.Itoa(h.BlockNum)
 
 	for _, dir := range list {
-		fmt.Println("Looking for directory ", h.Filename)
-		fmt.Println("Comparing to ", dir.Name())
+
 		if "/"+dir.Name() == h.Filename {
 			WriteJSON(root+fname, b)
+			log.Println("Wrote Block ", root+fname, "to disc")
 			return
 		}
 	}
@@ -142,7 +142,7 @@ func WriteBlock(b Block) {
 
 	fname = h.Filename + "/" + strconv.Itoa(h.BlockNum)
 	WriteJSON(root+fname, b)
-	log.Println("Wrote Block ", fname, "to disc")
+	log.Println("Wrote Block ", root+fname, "to disc")
 	return
 
 }
@@ -191,11 +191,11 @@ func BlockFromHeader(h BlockHeader) Block {
 		var b Block
 		if "/"+dir.Name() == h.Filename {
 			ReadJSON(root+fname, &b)
-			fmt.Println("Found block ", b)
+			fmt.Println("Found block ", root+fname)
 			return b
 		}
 	}
-	fmt.Println("Block not found!")
+	fmt.Println("Block not found ", root+fname)
 	return errBlock
 }
 

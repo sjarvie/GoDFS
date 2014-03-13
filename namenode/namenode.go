@@ -18,10 +18,10 @@ import (
 )
 
 // Config Options
-var host string     // listen host
-var port string     // listen port
-var SIZEOFBLOCK int //size of block in bytes
-var id string       // the namenode id
+var host string       // listen host
+var port string       // listen port
+var SIZEOFBLOCK int64 //size of block in bytes
+var id string         // the namenode id
 
 var headerChannel chan BlockHeader   // processes headers into filesystem
 var sendChannel chan Packet          //  enqueued packets for transmission
@@ -71,7 +71,7 @@ type Block struct {
 type BlockHeader struct {
 	DatanodeID string // ID of datanode which holds the block
 	Filename   string //the remote name of the block including the path "/test/0"
-	Size       uint64 // size of Block in bytes
+	Size       int64  // size of Block in bytes
 	BlockNum   int    // the 0 indexed position of Block within file
 	NumBlocks  int    // total number of Blocks in file
 }
@@ -98,7 +98,7 @@ type filenode struct {
 type datanode struct {
 	ID     string
 	listed bool
-	size   uint64
+	size   int64
 }
 
 // By is used to select the fields used when comparing datanodes
@@ -535,10 +535,15 @@ func ParseConfigXML(configpath string) error {
 		case "listenport":
 			port = o.Value
 		case "sizeofblock":
-			n, err := strconv.Atoi(o.Value)
+			n, err := strconv.ParseInt(o.Value, 0, 64)
 			if err != nil {
 				return err
 			}
+
+			if n < int64(4096) {
+				return errors.New("Buffer size must be greater than or equal to 4096 bytes")
+			}
+			fmt.Println("SIZEOFBLOCK", n)
 			SIZEOFBLOCK = n
 		default:
 			return errors.New("Bad ConfigOption received Key : " + o.Key + " Value : " + o.Value)
