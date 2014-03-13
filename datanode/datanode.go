@@ -3,6 +3,8 @@ package datanode
 
 import (
 	"encoding/json"
+	"encoding/xml"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -13,12 +15,14 @@ import (
 	"time"
 )
 
-const SERVERADDR = "localhost:8080"
-const SIZEOFBLOCK = 1000
+// Config Options
+var serverhost string // server host
+var serverport string // server port
+var SIZEOFBLOCK int64 // size of block in bytes
+var id string         // the datanode id
+var root string       // the root location on disk to store Blocks
 
-var id string   // datanode id
-var root string // root of the block filesystem
-var state = HB  // internal statemachine
+var state = HB // internal statemachine
 
 // commands for node communication
 const (
@@ -32,6 +36,17 @@ const (
 	GETHEADERS    = iota // request to retrieve the headers of a given filename
 	ERROR         = iota // notification of a failed request
 )
+
+// The XML parsing structures for configuration options
+type ConfigOptionList struct {
+	XMLName       xml.Name       `xml:"ConfigOptionList"`
+	ConfigOptions []ConfigOption `xml:"ConfigOption"`
+}
+
+type ConfigOption struct {
+	Key   string `xml:"key,attr"`
+	Value string `xml:",chardata"`
+}
 
 // A file is composed of one or more Blocks
 type Block struct {
@@ -55,6 +70,19 @@ type Packet struct {
 	CMD     int           // command for the handler
 	Data    Block         // optional Block
 	Headers []BlockHeader // optional Blockheader list
+}
+
+type errorString struct {
+	s string
+}
+
+func (e *errorString) Error() string {
+	return e.s
+}
+
+// New returns an error that formats as the given text.
+func New(text string) error {
+	return &errorString{text}
 }
 
 // ReceivePacket decodes a packet and adds it to the handler channel
@@ -159,8 +187,6 @@ func GetBlockHeaders() []BlockHeader {
 	// each directory is Filename, which holds Block files within
 	for _, dir := range list {
 
-		fmt.Println(dir.Name())
-
 		files, err := ioutil.ReadDir(dir.Name())
 		if err != nil {
 			log.Println("Error reading directory ", err)
@@ -191,7 +217,6 @@ func BlockFromHeader(h BlockHeader) Block {
 		var b Block
 		if "/"+dir.Name() == h.Filename {
 			ReadJSON(root+fname, &b)
-			fmt.Println("Found block ", root+fname)
 			return b
 		}
 	}
@@ -233,28 +258,64 @@ func WriteJSON(fileName string, key interface{}) {
 	}
 }
 
-// Init initializes all internal structures to run a datanode
-// The id of the node is dn_id and fspath is the location to
-// use as the block storage system on disc
-func Init(dn_id, fspath string) {
+// Parse Config sets up the node with the provided XML file
+func ParseConfigXML(configpath string) error {
+	xmlFile, err := os.Open(configpath)
+	if err != nil {
+		return err
+	}
+	defer xmlFile.Close()
 
-	id = dn_id
-	root = fspath
+	var list ConfigOptionList
+	err = xml.NewDecoder(xmlFile).Decode(&list)
+	if err != nil {
+		return err
+	}
+
+	for _, o := range list.ConfigOptions {
+		switch o.Key {
+		case "id":
+			id = o.Value
+		case "blockfileroot":
+			root = o.Value
+		case "serverhost":
+			serverhost = o.Value
+		case "serverport":
+			serverport = o.Value
+		case "sizeofblock":
+			n, err := strconv.ParseInt(o.Value, 0, 64)
+			if err != nil {
+				return err
+			}
+
+			if n < int64(4096) {
+				return errors.New("Buffer size must be greater than or equal to 4096 bytes")
+			}
+			SIZEOFBLOCK = n
+		default:
+			return errors.New("Bad ConfigOption received Key : " + o.Key + " Value : " + o.Value)
+		}
+	}
+
+	return nil
+}
+
+func Run(configpath string) {
+
+	ParseConfigXML(configpath)
 
 	err := os.Chdir(root)
 	CheckError(err)
-	conn, err := net.Dial("tcp", SERVERADDR)
+
+	conn, err := net.Dial("tcp", serverhost+":"+serverport)
 	CheckError(err)
 
 	encoder := json.NewEncoder(conn)
 	decoder := json.NewDecoder(conn)
-
 	PacketChannel := make(chan Packet)
-	go ReceivePackets(decoder, PacketChannel)
-
-	tick := time.Tick(2 * time.Second)
-
 	// start communication
+	go ReceivePackets(decoder, PacketChannel)
+	tick := time.Tick(2 * time.Second)
 	for {
 		select {
 		case <-tick:

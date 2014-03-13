@@ -1,4 +1,4 @@
-package namenode
+package datanode
 
 import (
 	"testing"
@@ -6,20 +6,24 @@ import (
 
 func TestValidXML(t *testing.T) {
 
-	err := ParseConfigXML("examplenamenode.xml")
+	err := ParseConfigXML("exampledatanode.xml")
 	if err != nil {
 		t.Errorf(err.Error())
 	}
 
-	if id != "NN" {
+	if id != "DN1" {
 		t.Errorf("Config did not set id correctly")
 	}
 
-	if host != "localhost" {
+	if root != "/DN1" {
+		t.Errorf("Config did not set id correctly")
+	}
+
+	if serverhost != "localhost" {
 		t.Errorf("Config did not set host correctly")
 	}
 
-	if port != "8080" {
+	if serverport != "8080" {
 		t.Errorf("Config did not set port correctly")
 	}
 

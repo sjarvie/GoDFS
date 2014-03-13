@@ -18,10 +18,10 @@ import (
 )
 
 // Config Options
-var host string       // listen host
-var port string       // listen port
-var SIZEOFBLOCK int64 //size of block in bytes
-var id string         // the namenode id
+var host string     // listen host
+var port string     // listen port
+var SIZEOFBLOCK int //size of block in bytes
+var id string       // the namenode id
 
 var headerChannel chan BlockHeader   // processes headers into filesystem
 var sendChannel chan Packet          //  enqueued packets for transmission
@@ -71,7 +71,7 @@ type Block struct {
 type BlockHeader struct {
 	DatanodeID string // ID of datanode which holds the block
 	Filename   string //the remote name of the block including the path "/test/0"
-	Size       int64  // size of Block in bytes
+	Size       int    // size of Block in bytes
 	BlockNum   int    // the 0 indexed position of Block within file
 	NumBlocks  int    // total number of Blocks in file
 }
@@ -212,9 +212,10 @@ func MergeNode(h BlockHeader) error {
 					} else {
 						if !ContainsHeader(filemap[path][h.BlockNum], h) {
 							filemap[path][h.BlockNum] = append(filemap[path][h.BlockNum], h)
+
 						}
 					}
-					dn.size += h.Size
+					dn.size += int64(h.Size)
 					//fmt.Println("adding Block header # ", h.BlockNum, "to filemap at ", path)
 				}
 
@@ -228,7 +229,7 @@ func MergeNode(h BlockHeader) error {
 					filemap[partial] = make(map[int][]BlockHeader)
 					filemap[partial][h.BlockNum] = make([]BlockHeader, 1, 1)
 					filemap[partial][h.BlockNum][0] = h
-					dn.size += h.Size
+					dn.size += int64(h.Size)
 					//fmt.fmt("creating Block header # ", h.BlockNum, "to filemap at ", path)
 				}
 
@@ -331,7 +332,7 @@ func HandlePacket(p Packet) {
 	}()
 
 	if p.SRC == "" {
-		fmt.Println("Badpacket")
+		fmt.Println("Could not identify packet")
 		return
 	}
 
@@ -345,7 +346,7 @@ func HandlePacket(p Packet) {
 			return
 		case DISTRIBUTE:
 			b := p.Data
-			fmt.Println("Distributing Block", b)
+			fmt.Println("Distributing Block ", b.Header.Filename, "/", b.Header.BlockNum, " to ", b.Header.DatanodeID)
 			p, err := AssignBlock(b)
 			if err != nil {
 				r.CMD = ERROR
@@ -386,7 +387,6 @@ func HandlePacket(p Packet) {
 			fname := p.Headers[0].Filename
 			blockMap, ok := filemap[fname]
 			if !ok {
-				fmt.Println(filemap)
 				r.CMD = ERROR
 				r.Err = "File not found " + fname
 				fmt.Println("Requested file in filesystem not found, ", fname)
@@ -400,9 +400,16 @@ func HandlePacket(p Packet) {
 				break
 			}
 			numBlocks := blockMap[0][0].NumBlocks
+
 			headers := make([]BlockHeader, numBlocks, numBlocks)
 			for i, _ := range headers {
-				fmt.Println(blockMap[i])
+
+				_, ok = blockMap[i]
+				if !ok {
+					r.CMD = ERROR
+					r.Err = "Could not find needed block in file "
+					break
+				}
 				headers[i] = blockMap[i][0] // grab the first available BlockHeader for each block number
 			}
 			r.Headers = headers
@@ -415,6 +422,8 @@ func HandlePacket(p Packet) {
 
 		switch p.CMD {
 		case HB:
+
+			fmt.Println("Received Heartbeat from ", p.SRC)
 			if !listed {
 				r.CMD = LIST
 			} else {
@@ -423,7 +432,7 @@ func HandlePacket(p Packet) {
 
 		case LIST:
 
-			fmt.Printf("Listing directory contents from %s \n", p.SRC)
+			fmt.Println("Received BlockHeaders from ", p.SRC)
 			list := p.Headers
 			for _, h := range list {
 				headerChannel <- h
@@ -437,7 +446,7 @@ func HandlePacket(p Packet) {
 				headerChannel <- p.Headers[0]
 			}
 			r.CMD = ACK
-			fmt.Println("Received BLOCKACK ", p.Headers[0])
+			fmt.Println("Received BLOCKACK from ", p.SRC)
 
 		case BLOCK:
 			fmt.Println("Received Block Packet with header", p.Data.Header)
@@ -458,7 +467,6 @@ func HandlePacket(p Packet) {
 	}
 
 	// send response
-	fmt.Println("sending packet ", r)
 	sendChannel <- r
 
 }
@@ -468,7 +476,7 @@ func CheckConnection(conn net.Conn, p Packet) {
 
 	// C is the client(hardcode for now)
 	if p.SRC == "C" {
-		fmt.Println("Adding new client conncetion")
+		fmt.Println("Adding new client connection")
 		sendMapLock.Lock()
 		sendMap[p.SRC] = json.NewEncoder(conn)
 		sendMapLock.Unlock()
@@ -496,16 +504,17 @@ func HandleConnection(conn net.Conn) {
 	decoder := json.NewDecoder(conn)
 	err := decoder.Decode(&p)
 	if err != nil {
-		fmt.Println("error receiving")
+		fmt.Println("Unable to communicate with node")
 	}
 	CheckConnection(conn, p)
+	dn := datanodemap[p.SRC]
 
 	// receive packets and handle
 	for {
 		var p Packet
 		err := decoder.Decode(&p)
 		if err != nil {
-			fmt.Println("error receiving: err = ")
+			fmt.Println("Datanode ", dn.ID, " disconnected!")
 			return
 		}
 		HandlePacket(p)
@@ -535,15 +544,14 @@ func ParseConfigXML(configpath string) error {
 		case "listenport":
 			port = o.Value
 		case "sizeofblock":
-			n, err := strconv.ParseInt(o.Value, 0, 64)
+			n, err := strconv.Atoi(o.Value)
 			if err != nil {
 				return err
 			}
 
-			if n < int64(4096) {
+			if n < 4096 {
 				return errors.New("Buffer size must be greater than or equal to 4096 bytes")
 			}
-			fmt.Println("SIZEOFBLOCK", n)
 			SIZEOFBLOCK = n
 		default:
 			return errors.New("Bad ConfigOption received Key : " + o.Key + " Value : " + o.Value)

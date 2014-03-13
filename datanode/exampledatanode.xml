@@ -1,0 +1,7 @@
+<ConfigOptionList>
+	<ConfigOption key="id">DN1</ConfigOption>
+	<ConfigOption key="blockfileroot">/DN1</ConfigOption>
+	<ConfigOption key="serverhost">localhost</ConfigOption>
+	<ConfigOption key="serverport">8080</ConfigOption>
+	<ConfigOption key="sizeofblock">4096</ConfigOption>
+</ConfigOptionList>

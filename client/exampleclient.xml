@@ -1,0 +1,5 @@
+<ConfigOptionList>
+	<ConfigOption key="serverhost">localhost</ConfigOption>
+	<ConfigOption key="serverport">8080</ConfigOption>
+	<ConfigOption key="sizeofblock">4096</ConfigOption>
+</ConfigOptionList>
