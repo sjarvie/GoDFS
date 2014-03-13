@@ -76,7 +76,7 @@ type Packet struct {
 	SRC     string        // source ID
 	DST     string        // destination ID
 	CMD     int           // command for the handler
-	Err     string        // optional error explanation
+	Message string        // optional packet contents explanation
 	Data    Block         // optional Block
 	Headers []BlockHeader // optional BlockHeader list
 }
@@ -306,12 +306,16 @@ func RetrieveFile(localname, remotename string) {
 	decoder.Decode(&r)
 
 	if r.CMD == ERROR {
-		fmt.Println(r.Err)
+		fmt.Println(r.Message)
 		return
 	}
 
 	if r.CMD != GETHEADERS || r.Headers == nil {
-		fmt.Println("Bad response packet ", r)
+		if r.CMD == ERROR {
+			fmt.Println(r.Message)
+		} else {
+			fmt.Println("Bad response packet ", r)
+		}
 		return
 	}
 
@@ -346,7 +350,11 @@ func RetrieveFile(localname, remotename string) {
 		decoder.Decode(&r)
 
 		if r.CMD != BLOCK {
-			fmt.Println("Received bad packet ", p)
+			if r.CMD == ERROR {
+				fmt.Println(r.Message)
+			} else {
+				fmt.Println("Bad response packet ", r)
+			}
 			return
 		}
 		b := r.Data

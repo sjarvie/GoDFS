@@ -68,10 +68,10 @@ type Packet struct {
 	SRC     string        // source ID
 	DST     string        // destination ID
 	CMD     int           // command for the handler
+	Message string        // optional packet contents explanation
 	Data    Block         // optional Block
-	Headers []BlockHeader // optional Blockheader list
+	Headers []BlockHeader // optional BlockHeader list
 }
-
 type errorString struct {
 	s string
 }

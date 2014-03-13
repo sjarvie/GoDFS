@@ -81,7 +81,7 @@ type Packet struct {
 	SRC     string        // source ID
 	DST     string        // destination ID
 	CMD     int           // command for the handler
-	Err     string        // optional error explanation
+	Message string        // optional packet contents explanation
 	Data    Block         // optional Block
 	Headers []BlockHeader // optional BlockHeader list
 }
@@ -350,7 +350,7 @@ func HandlePacket(p Packet) {
 			p, err := AssignBlock(b)
 			if err != nil {
 				r.CMD = ERROR
-				r.Err = err.Error()
+				r.Message = err.Error()
 			}
 			sendChannel <- p
 
@@ -359,7 +359,7 @@ func HandlePacket(p Packet) {
 			r.CMD = RETRIEVEBLOCK
 			if p.Headers == nil || len(p.Headers) != 1 {
 				r.CMD = ERROR
-				r.Err = "Invalid Header received"
+				r.Message = "Invalid Header received"
 				fmt.Println("Invalid RETRIEVEBLOCK Packet , ", p)
 				break
 			}
@@ -377,7 +377,7 @@ func HandlePacket(p Packet) {
 			r.CMD = GETHEADERS
 			if p.Headers == nil || len(p.Headers) != 1 {
 				r.CMD = ERROR
-				r.Err = "Invalid Header received"
+				r.Message = "Invalid Header received"
 				fmt.Println("Received invalid Header Packet, ", p)
 				break
 			}
@@ -388,7 +388,7 @@ func HandlePacket(p Packet) {
 			blockMap, ok := filemap[fname]
 			if !ok {
 				r.CMD = ERROR
-				r.Err = "File not found " + fname
+				r.Message = "File not found " + fname
 				fmt.Println("Requested file in filesystem not found, ", fname)
 				break
 			}
@@ -396,7 +396,7 @@ func HandlePacket(p Packet) {
 			_, ok = blockMap[0]
 			if !ok {
 				r.CMD = ERROR
-				r.Err = "Could not locate first block in file"
+				r.Message = "Could not locate first block in file"
 				break
 			}
 			numBlocks := blockMap[0][0].NumBlocks
@@ -407,7 +407,7 @@ func HandlePacket(p Packet) {
 				_, ok = blockMap[i]
 				if !ok {
 					r.CMD = ERROR
-					r.Err = "Could not find needed block in file "
+					r.Message = "Could not find needed block in file "
 					break
 				}
 				headers[i] = blockMap[i][0] // grab the first available BlockHeader for each block number
